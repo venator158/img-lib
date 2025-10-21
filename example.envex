@@ -1,0 +1,26 @@
+# Image Similarity Search Configuration
+
+# Database Configuration
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=imsrc
+DB_USER=postgres
+DB_PASSWORD=YOUR_PASSWORD_HERE
+
+# Model Configuration
+MODEL_NAME=resnet50  # Options: resnet50, resnet18
+DEVICE=auto  # auto, cpu, cuda
+
+# FAISS Configuration
+FAISS_INDEX_PATH=data/faiss_index.bin
+FAISS_INDEX_TYPE=flatl2  # flatl2, ivfflat, hnsw
+USE_PROTOTYPE_FILTERING=true
+
+# API Configuration
+MAX_UPLOAD_SIZE=10485760  # 10MB in bytes
+DEFAULT_SEARCH_LIMIT=10
+API_HOST=0.0.0.0
+API_PORT=8000
+
+# Logging
+LOG_LEVEL=INFO

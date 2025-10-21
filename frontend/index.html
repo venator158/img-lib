@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Similarity Search</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .card {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+
+        .upload-section {
+            text-align: center;
+        }
+
+        .upload-area {
+            border: 3px dashed #ddd;
+            border-radius: 10px;
+            padding: 40px;
+            margin: 20px 0;
+            background: #f9f9f9;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .upload-area:hover {
+            border-color: #667eea;
+            background: #f0f4ff;
+        }
+
+        .upload-area.dragover {
+            border-color: #667eea;
+            background: #e8f0fe;
+        }
+
+        #fileInput {
+            display: none;
+        }
+
+        .upload-icon {
+            font-size: 3rem;
+            color: #ddd;
+            margin-bottom: 20px;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 25px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 10px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .search-options {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            align-items: center;
+            justify-content: center;
+            margin: 20px 0;
+        }
+
+        .option-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .option-group label {
+            font-weight: 500;
+            cursor: pointer;
+        }
+
+        .option-group input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+
+        .option-group input[type="number"] {
+            width: 70px;
+            padding: 5px 8px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            text-align: center;
+        }
+
+        .results-section {
+            margin-top: 30px;
+        }
+
+        .results-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .results-info {
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        .results-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 20px;
+        }
+
+        .result-item {
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+        }
+
+        .result-item:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+        }
+
+        .result-image {
+            width: 100%;
+            height: 150px;
+            object-fit: cover;
+            background: #f5f5f5;
+        }
+
+        .result-info {
+            padding: 15px;
+        }
+
+        .result-title {
+            font-weight: 600;
+            margin-bottom: 5px;
+            color: #333;
+        }
+
+        .result-details {
+            font-size: 0.8rem;
+            color: #666;
+            line-height: 1.4;
+        }
+
+        .similarity-score {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            display: inline-block;
+            margin-top: 8px;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            color: #667eea;
+            font-size: 1.1rem;
+            margin: 20px 0;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            background: #fee;
+            border: 1px solid #fcc;
+            color: #a00;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            display: none;
+        }
+
+        .error.show {
+            display: block;
+        }
+
+        .success {
+            background: #efe;
+            border: 1px solid #cfc;
+            color: #060;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            display: none;
+        }
+
+        .success.show {
+            display: block;
+        }
+
+        .prototype-results {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f8f9ff;
+            border-radius: 8px;
+        }
+
+        .prototype-item {
+            display: inline-block;
+            background: white;
+            padding: 8px 15px;
+            margin: 5px;
+            border-radius: 20px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            font-size: 0.9rem;
+        }
+
+        .query-preview {
+            max-width: 200px;
+            max-height: 200px;
+            border-radius: 10px;
+            margin: 20px auto;
+            display: none;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+
+        .query-preview.show {
+            display: block;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .card {
+                padding: 20px;
+            }
+            
+            .results-grid {
+                grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+                gap: 15px;
+            }
+            
+            .search-options {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .option-group {
+                justify-content: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 Image Similarity Search</h1>
+            <p>Upload an image to find visually similar images using FAISS and deep learning</p>
+        </div>
+
+        <div class="card">
+            <div class="upload-section">
+                <h2>Search for Similar Images</h2>
+                
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-icon">📷</div>
+                    <p><strong>Click to select an image</strong> or drag and drop here</p>
+                    <p style="font-size: 0.9rem; color: #666; margin-top: 10px;">
+                        Supported formats: JPG, PNG, GIF (Max size: 10MB)
+                    </p>
+                </div>
+                
+                <input type="file" id="fileInput" accept="image/*">
+                
+                <img id="queryPreview" class="query-preview" alt="Query image preview">
+                
+                <div class="search-options">
+                    <div class="option-group">
+                        <input type="checkbox" id="usePrototypes" checked>
+                        <label for="usePrototypes">Use prototype filtering</label>
+                    </div>
+                    
+                    <div class="option-group">
+                        <label for="searchLimit">Results:</label>
+                        <input type="number" id="searchLimit" value="10" min="1" max="50">
+                    </div>
+                    
+                    <div class="option-group">
+                        <label for="prototypeLimit">Top categories:</label>
+                        <input type="number" id="prototypeLimit" value="3" min="1" max="10">
+                    </div>
+                </div>
+
+                <button class="btn" id="searchBtn" disabled onclick="performSearch()">
+                    Search Similar Images
+                </button>
+                
+                <button class="btn" id="prototypeBtn" disabled onclick="searchPrototypes()">
+                    Search Prototypes Only
+                </button>
+
+                <div class="loading" id="loading">
+                    <div class="spinner"></div>
+                    Searching for similar images...
+                </div>
+
+                <div class="error" id="errorMessage"></div>
+                <div class="success" id="successMessage"></div>
+            </div>
+        </div>
+
+        <div class="card" id="resultsCard" style="display: none;">
+            <div class="results-section">
+                <div class="results-header">
+                    <h2>Search Results</h2>
+                    <div class="results-info" id="resultsInfo"></div>
+                </div>
+
+                <div id="prototypeResults" class="prototype-results" style="display: none;">
+                    <h3>Most Similar Categories:</h3>
+                    <div id="prototypeList"></div>
+                </div>
+
+                <div class="results-grid" id="resultsGrid"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '';  // Same domain
+        let selectedFile = null;
+
+        // DOM elements
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const queryPreview = document.getElementById('queryPreview');
+        const searchBtn = document.getElementById('searchBtn');
+        const prototypeBtn = document.getElementById('prototypeBtn');
+        const loading = document.getElementById('loading');
+        const errorMessage = document.getElementById('errorMessage');
+        const successMessage = document.getElementById('successMessage');
+        const resultsCard = document.getElementById('resultsCard');
+        const resultsInfo = document.getElementById('resultsInfo');
+        const resultsGrid = document.getElementById('resultsGrid');
+        const prototypeResults = document.getElementById('prototypeResults');
+        const prototypeList = document.getElementById('prototypeList');
+
+        // Event listeners
+        uploadArea.addEventListener('click', () => fileInput.click());
+        uploadArea.addEventListener('dragover', handleDragOver);
+        uploadArea.addEventListener('dragleave', handleDragLeave);
+        uploadArea.addEventListener('drop', handleDrop);
+        fileInput.addEventListener('change', handleFileSelect);
+
+        function handleDragOver(e) {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        }
+
+        function handleDragLeave(e) {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFile(files[0]);
+            }
+        }
+
+        function handleFileSelect(e) {
+            const file = e.target.files[0];
+            if (file) {
+                handleFile(file);
+            }
+        }
+
+        function handleFile(file) {
+            // Validate file type
+            if (!file.type.startsWith('image/')) {
+                showError('Please select a valid image file.');
+                return;
+            }
+
+            // Validate file size (10MB limit)
+            if (file.size > 10 * 1024 * 1024) {
+                showError('File size must be less than 10MB.');
+                return;
+            }
+
+            selectedFile = file;
+            
+            // Show preview
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                queryPreview.src = e.target.result;
+                queryPreview.classList.add('show');
+            };
+            reader.readAsDataURL(file);
+
+            // Enable buttons
+            searchBtn.disabled = false;
+            prototypeBtn.disabled = false;
+
+            hideMessages();
+        }
+
+        async function performSearch() {
+            if (!selectedFile) {
+                showError('Please select an image first.');
+                return;
+            }
+
+            const usePrototypes = document.getElementById('usePrototypes').checked;
+            const limit = parseInt(document.getElementById('searchLimit').value);
+            const prototypeLimit = parseInt(document.getElementById('prototypeLimit').value);
+
+            const formData = new FormData();
+            formData.append('file', selectedFile);
+
+            const params = new URLSearchParams({
+                limit: limit.toString(),
+                use_prototypes: usePrototypes.toString(),
+                prototype_limit: prototypeLimit.toString()
+            });
+
+            showLoading();
+            hideMessages();
+
+            try {
+                const response = await fetch(`/search?${params}`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const results = await response.json();
+                displayResults(results);
+                
+            } catch (error) {
+                console.error('Search error:', error);
+                showError(`Search failed: ${error.message}`);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        async function searchPrototypes() {
+            if (!selectedFile) {
+                showError('Please select an image first.');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', selectedFile);
+
+            showLoading();
+            hideMessages();
+
+            try {
+                const response = await fetch('/search/prototypes', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const results = await response.json();
+                displayPrototypeResults(results);
+                
+            } catch (error) {
+                console.error('Prototype search error:', error);
+                showError(`Prototype search failed: ${error.message}`);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function displayResults(results) {
+            resultsCard.style.display = 'block';
+            
+            // Update results info
+            const searchTime = (results.search_time * 1000).toFixed(0);
+            resultsInfo.innerHTML = `
+                Found ${results.similar_images.length} similar images in ${searchTime}ms
+                ${results.used_prototype_filtering ? '(with prototype filtering)' : ''}
+            `;
+
+            // Show prototype categories if used
+            if (results.used_prototype_filtering && results.prototype_categories) {
+                prototypeResults.style.display = 'block';
+                prototypeList.innerHTML = results.prototype_categories
+                    .map(catId => `<span class="prototype-item">Category ${catId}</span>`)
+                    .join('');
+            } else {
+                prototypeResults.style.display = 'none';
+            }
+
+            // Display results grid
+            resultsGrid.innerHTML = '';
+            
+            results.similar_images.forEach(image => {
+                const resultItem = createResultItem(image);
+                resultsGrid.appendChild(resultItem);
+            });
+
+            // Scroll to results
+            resultsCard.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function displayPrototypeResults(results) {
+            resultsCard.style.display = 'block';
+            
+            // Update results info
+            const searchTime = (results.search_time * 1000).toFixed(0);
+            resultsInfo.innerHTML = `Found ${results.prototypes.length} category prototypes in ${searchTime}ms`;
+
+            // Hide image prototype section
+            prototypeResults.style.display = 'none';
+
+            // Display prototype results as cards
+            resultsGrid.innerHTML = '';
+            
+            results.prototypes.forEach(prototype => {
+                const prototypeItem = createPrototypeItem(prototype);
+                resultsGrid.appendChild(prototypeItem);
+            });
+
+            // Scroll to results
+            resultsCard.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function createResultItem(image) {
+            const item = document.createElement('div');
+            item.className = 'result-item';
+            
+            const similarity = image.similarity_score ? (image.similarity_score * 100).toFixed(1) : 'N/A';
+            
+            item.innerHTML = `
+                <img 
+                    src="/images/${image.image_id}" 
+                    alt="Similar image" 
+                    class="result-image"
+                    onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjE1MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjVmNWY1Ii8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkltYWdlIE5vdCBGb3VuZDwvdGV4dD48L3N2Zz4='"
+                >
+                <div class="result-info">
+                    <div class="result-title">Image #${image.image_id}</div>
+                    <div class="result-details">
+                        Category: ${image.category_name}<br>
+                        ID: ${image.image_id}
+                    </div>
+                    <div class="similarity-score">${similarity}% similar</div>
+                </div>
+            `;
+            
+            return item;
+        }
+
+        function createPrototypeItem(prototype) {
+            const item = document.createElement('div');
+            item.className = 'result-item';
+            
+            const similarity = (prototype.similarity_score * 100).toFixed(1);
+            
+            item.innerHTML = `
+                <div style="height: 150px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); display: flex; align-items: center; justify-content: center; color: white; font-size: 2rem;">
+                    📊
+                </div>
+                <div class="result-info">
+                    <div class="result-title">${prototype.category_name}</div>
+                    <div class="result-details">
+                        Category ID: ${prototype.category_id}<br>
+                        Prototype Vector
+                    </div>
+                    <div class="similarity-score">${similarity}% similar</div>
+                </div>
+            `;
+            
+            return item;
+        }
+
+        function showLoading() {
+            loading.classList.add('show');
+            searchBtn.disabled = true;
+            prototypeBtn.disabled = true;
+        }
+
+        function hideLoading() {
+            loading.classList.remove('show');
+            if (selectedFile) {
+                searchBtn.disabled = false;
+                prototypeBtn.disabled = false;
+            }
+        }
+
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.classList.add('show');
+            successMessage.classList.remove('show');
+        }
+
+        function showSuccess(message) {
+            successMessage.textContent = message;
+            successMessage.classList.add('show');
+            errorMessage.classList.remove('show');
+        }
+
+        function hideMessages() {
+            errorMessage.classList.remove('show');
+            successMessage.classList.remove('show');
+        }
+
+        // Initialize the application
+        document.addEventListener('DOMContentLoaded', () => {
+            // Check API status
+            fetch('/status')
+                .then(response => response.json())
+                .then(status => {
+                    if (status.status === 'healthy') {
+                        console.log('API is healthy:', status);
+                    } else {
+                        showError('API is not fully operational. Some features may not work.');
+                    }
+                })
+                .catch(error => {
+                    console.error('Failed to check API status:', error);
+                    showError('Unable to connect to the API. Please check your connection.');
+                });
+        });
+    </script>
+</body>
+</html>
