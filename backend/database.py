@@ -369,7 +369,23 @@ class PrototypeManager:
                 """, (category_id,))
                 
                 result = cur.fetchone()
-                return np.array(result[0]) if result else None
+                if not result:
+                    return None
+                
+                vector_data = result[0]
+                # Parse vector from pgvector format
+                if isinstance(vector_data, str):
+                    # Remove brackets and split by commas
+                    vector_str = vector_data.strip('[]')
+                    vector_values = [float(x.strip()) for x in vector_str.split(',')]
+                    vector = np.array(vector_values, dtype=np.float32)
+                elif isinstance(vector_data, list):
+                    vector = np.array(vector_data, dtype=np.float32)
+                else:
+                    # Fallback for other formats
+                    vector = np.array(vector_data, dtype=np.float32)
+                
+                return vector
     
     def get_all_prototypes(self) -> Dict[int, np.ndarray]:
         """Get all prototypes as a dictionary mapping category_id to prototype vector."""
@@ -378,7 +394,27 @@ class PrototypeManager:
                 cur.execute("""
                     SELECT category_id, prototype_vector FROM _category_prototypes
                 """)
-                return {row[0]: np.array(row[1]) for row in cur.fetchall()}
+                
+                prototypes = {}
+                for row in cur.fetchall():
+                    category_id = row[0]
+                    vector_data = row[1]
+                    
+                    # Parse vector from pgvector format
+                    if isinstance(vector_data, str):
+                        # Remove brackets and split by commas
+                        vector_str = vector_data.strip('[]')
+                        vector_values = [float(x.strip()) for x in vector_str.split(',')]
+                        vector = np.array(vector_values, dtype=np.float32)
+                    elif isinstance(vector_data, list):
+                        vector = np.array(vector_data, dtype=np.float32)
+                    else:
+                        # Fallback for other formats
+                        vector = np.array(vector_data, dtype=np.float32)
+                    
+                    prototypes[category_id] = vector
+                
+                return prototypes
     
     def create_all_prototypes(self):
         """Create prototypes for all categories that have vectors."""

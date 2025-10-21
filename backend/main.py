@@ -16,6 +16,13 @@ from PIL import Image
 import logging
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Fix OpenMP conflict
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+# Load environment variables
+load_dotenv()
 
 # Import our custom modules
 from .vector_processor import VectorSearchEngine, ImageEmbedder
@@ -134,7 +141,7 @@ def load_config() -> Dict[str, Any]:
         "db_name": os.getenv("DB_NAME", "imsrc"),
         "db_user": os.getenv("DB_USER", "postgres"),
         "db_password": os.getenv("DB_PASSWORD", "14789"),
-        "model_name": os.getenv("MODEL_NAME", "resnet50"),
+        "model_name": os.getenv("MODEL_NAME", "resnet18"),
         "faiss_index_path": os.getenv("FAISS_INDEX_PATH", "data/faiss_index.bin"),
         "max_upload_size": int(os.getenv("MAX_UPLOAD_SIZE", 10 * 1024 * 1024)),  # 10MB
         "default_search_limit": int(os.getenv("DEFAULT_SEARCH_LIMIT", 10)),
@@ -165,10 +172,11 @@ def format_image_info(image_data: Dict[str, Any], similarity_score: Optional[flo
 
 # API Endpoints
 
-@app.get("/", response_class=JSONResponse)
+@app.get("/")
 async def root():
-    """Root endpoint."""
-    return {"message": "Image Similarity Search API", "status": "running"}
+    """Root endpoint - redirect to frontend."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/app")
 
 
 @app.get("/status", response_model=SystemStatus)
@@ -285,7 +293,7 @@ async def upload_image(
 async def search_similar_images(
     file: UploadFile = File(...),
     limit: int = Query(10, ge=1, le=50, description="Number of similar images to return"),
-    use_prototypes: bool = Query(True, description="Use prototype filtering"),
+    use_prototypes: bool = Query(False, description="Use prototype filtering (slower but more accurate)"),
     prototype_limit: int = Query(3, ge=1, le=10, description="Number of top categories to consider")
 ):
     """Search for similar images using uploaded query image."""
@@ -300,33 +308,40 @@ async def search_similar_images(
         
         # Read and process query image
         query_data = await file.read()
+        embedding_start = time.time()
         query_embedding = vector_engine.embedder.embed_image(query_data)
+        embedding_time = time.time() - embedding_start
+        
+        logger.info(f"Query embedding generated in {embedding_time:.2f}s - shape: {query_embedding.shape}, dtype: {query_embedding.dtype}")
         
         prototype_categories = None
         
         if use_prototypes and config.get("use_prototype_filtering", True):
             # First, find most similar categories using prototypes
+            logger.info("Starting prototype similarity search...")
             prototype_categories = db_service.search_similar_by_prototype(
                 query_embedding, top_categories=prototype_limit
             )
+            logger.info(f"Found similar categories: {prototype_categories}")
             
-            # Get all images from these categories
-            candidate_images = []
-            for cat_id in prototype_categories:
-                cat_images = db_service.image_manager.get_images_by_category(cat_id)
-                candidate_images.extend([(img["image_id"], img["image_data"]) for img in cat_images])
+            # Search in full index first, then filter by categories
+            all_results = vector_engine.search_similar(query_data, k=limit*5)  # Get more results to filter
             
-            # Search within candidate images
-            if candidate_images:
-                # Create a temporary index for candidates
-                temp_engine = VectorSearchEngine(model_name=vector_engine.embedder.model_name)
-                temp_engine.build_index(candidate_images, index_type='flatl2')
-                results = temp_engine.search_similar(query_data, k=limit)
-            else:
-                results = []
+            # Filter results by prototype categories
+            results = []
+            for image_id, similarity_score in all_results:
+                image_info = db_service.image_manager.get_image_by_id(image_id)
+                if image_info and image_info['category_id'] in prototype_categories:
+                    results.append((image_id, similarity_score))
+                    if len(results) >= limit:
+                        break
         else:
-            # Search in full FAISS index
+            # Search in full FAISS index (fast path)
+            logger.info("Using direct FAISS search...")
+            search_start = time.time()
             results = vector_engine.search_similar(query_data, k=limit)
+            search_time = time.time() - search_start
+            logger.info(f"FAISS search completed in {search_time:.2f}s, found {len(results)} results")
         
         # Get detailed image information
         similar_images = []
@@ -545,9 +560,10 @@ if static_path.exists():
         """Serve the frontend application."""
         index_path = static_path / "index.html"
         if index_path.exists():
-            with open(index_path, 'r') as f:
+            with open(index_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-            return content
+            from fastapi.responses import HTMLResponse
+            return HTMLResponse(content=content)
         else:
             raise HTTPException(status_code=404, detail="Frontend not available")
 

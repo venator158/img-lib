@@ -11,11 +11,12 @@ import logging
 from typing import List, Tuple
 import time
 
-# Add backend to path
-sys.path.append(str(Path(__file__).parent.parent / 'backend'))
+# Add project root to path for proper package imports
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
-from database import ImageSimilarityService, DatabaseConfig
-from vector_processor import VectorSearchEngine
+from backend.database import ImageSimilarityService, DatabaseConfig
+from backend.vector_processor import VectorSearchEngine
 
 # Configure logging
 logging.basicConfig(
