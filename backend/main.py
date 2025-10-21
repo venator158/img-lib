@@ -324,8 +324,8 @@ async def search_similar_images(
             )
             logger.info(f"Found similar categories: {prototype_categories}")
             
-            # Search in full index first, then filter by categories
-            all_results = vector_engine.search_similar(query_data, k=limit*5)  # Get more results to filter
+            # Search in full index first, then filter by categories (use pre-computed embedding)
+            all_results = vector_engine.search_similar_by_embedding(query_embedding, k=limit*5)  # Get more results to filter
             
             # Filter results by prototype categories
             results = []
@@ -336,12 +336,17 @@ async def search_similar_images(
                     if len(results) >= limit:
                         break
         else:
-            # Search in full FAISS index (fast path)
+            # Search in full FAISS index (fast path - use pre-computed embedding)
             logger.info("Using direct FAISS search...")
             search_start = time.time()
-            results = vector_engine.search_similar(query_data, k=limit)
+            results = vector_engine.search_similar_by_embedding(query_embedding, k=limit)
             search_time = time.time() - search_start
             logger.info(f"FAISS search completed in {search_time:.2f}s, found {len(results)} results")
+            
+            # Log similarity scores for debugging
+            if results:
+                scores = [score for _, score in results]
+                logger.info(f"Similarity scores - Min: {min(scores):.4f}, Max: {max(scores):.4f}, Avg: {np.mean(scores):.4f}")
         
         # Get detailed image information
         similar_images = []

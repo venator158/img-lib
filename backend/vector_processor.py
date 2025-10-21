@@ -372,11 +372,51 @@ class VectorSearchEngine:
         
         # Convert to image IDs and similarity scores
         results = []
+        
         for i, (distance, idx) in enumerate(zip(distances[0], indices[0])):
             if idx < len(self.image_ids):
                 image_id = self.image_ids[idx]
-                # Convert L2 distance to similarity score (lower distance = higher similarity)
-                similarity_score = 1.0 / (1.0 + distance)
+                # Convert L2 distance to similarity score using sigmoid normalization
+                # Sigmoid function: 1 / (1 + exp(k * (distance - threshold)))
+                # For ResNet embeddings, typical good matches have distances 400-600
+                threshold = 500.0  # Distance threshold for 50% similarity
+                k = 0.01  # Steepness parameter (smaller = gentler curve)
+                similarity_score = 1.0 / (1.0 + np.exp(k * (distance - threshold)))
+                results.append((image_id, similarity_score))
+        
+        return results
+    
+    def search_similar_by_embedding(self, query_embedding: np.ndarray, k: int = 10) -> List[Tuple[int, float]]:
+        """
+        Search for similar images using a pre-computed query embedding.
+        More efficient when you already have the embedding.
+        
+        Args:
+            query_embedding: Pre-computed query image embedding
+            k: Number of similar images to return
+            
+        Returns:
+            List of tuples (image_id, similarity_score)
+        """
+        # Search in FAISS index
+        distances, indices = self.faiss_manager.search(query_embedding, k)
+        
+        # Debug: Print raw distances
+        if len(distances[0]) > 0:
+            print(f"DEBUG: Raw distances - Min: {np.min(distances[0]):.2f}, Max: {np.max(distances[0]):.2f}, Mean: {np.mean(distances[0]):.2f}")
+        
+        # Convert to image IDs and similarity scores
+        results = []
+        
+        for i, (distance, idx) in enumerate(zip(distances[0], indices[0])):
+            if idx < len(self.image_ids):
+                image_id = self.image_ids[idx]
+                # Convert L2 distance to similarity score using sigmoid normalization
+                # Sigmoid function: 1 / (1 + exp(k * (distance - threshold)))
+                # For ResNet embeddings, typical good matches have distances 400-600
+                threshold = 500.0  # Distance threshold for 50% similarity
+                k = 0.01  # Steepness parameter (smaller = gentler curve)
+                similarity_score = 1.0 / (1.0 + np.exp(k * (distance - threshold)))
                 results.append((image_id, similarity_score))
         
         return results
