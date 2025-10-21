@@ -10,5 +10,5 @@
 *.swp
 *.DS_Store
 .env
-data/
+*.bin*
 _pycache_/
