@@ -10,4 +10,4 @@
 *.swp
 *.DS_Store
 .env
-/data/
+data/
