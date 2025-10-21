@@ -157,7 +157,7 @@ class ImageEmbedder:
                 with torch.no_grad():
                     # Enable mixed precision if available on GPU
                     if self.device == 'cuda' and torch.cuda.is_available():
-                        with torch.cuda.amp.autocast():
+                        with torch.amp.autocast('cuda'):
                             batch_embeddings = self.model(batch_tensor)
                     else:
                         batch_embeddings = self.model(batch_tensor)

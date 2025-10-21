@@ -12,3 +12,8 @@
 .env
 *.bin*
 _pycache_/
+
+# FAISS index files (generated locally)
+data/faiss_index.bin
+data/faiss_index.bin.ids
+data/faiss_index.bin.meta
