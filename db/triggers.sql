@@ -5,44 +5,38 @@
 -- Make sure pgcrypto is enabled (for hashing binary image data)
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
--- Add a unique image_hash column if missing
+-- Add image_hash column if missing
 ALTER TABLE images
 ADD COLUMN IF NOT EXISTS image_hash TEXT UNIQUE;
 
--- Automatically compute hash before insert/update if missing
-CREATE OR REPLACE FUNCTION set_image_hash()
+-- Trigger function: compute hash and prevent duplicates
+CREATE OR REPLACE FUNCTION compute_hash_and_prevent_duplicate()
 RETURNS TRIGGER AS $$
 BEGIN
+    -- Compute SHA256 hash if not already set
     IF NEW.image_hash IS NULL THEN
-        -- Compute SHA256 hash of image binary data
         NEW.image_hash := encode(digest(NEW.image_data, 'sha256'), 'hex');
     END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS trg_set_image_hash ON images;
-CREATE TRIGGER trg_set_image_hash
-BEFORE INSERT OR UPDATE ON images
-FOR EACH ROW
-EXECUTE FUNCTION set_image_hash();
-
--- Prevent insertion of duplicate images
-CREATE OR REPLACE FUNCTION prevent_duplicate_images()
-RETURNS TRIGGER AS $$
-BEGIN
+    -- Check if the hash already exists in the table
     IF EXISTS (SELECT 1 FROM images WHERE image_hash = NEW.image_hash) THEN
         RAISE EXCEPTION 'Duplicate image detected (hash: %)', NEW.image_hash;
     END IF;
+
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
+-- Drop old triggers (if any)
+DROP TRIGGER IF EXISTS trg_set_image_hash ON images;
 DROP TRIGGER IF EXISTS trg_prevent_duplicate_images ON images;
-CREATE TRIGGER trg_prevent_duplicate_images
-BEFORE INSERT ON images
+
+-- Create single combined trigger
+CREATE TRIGGER trg_compute_hash_and_prevent_duplicate
+BEFORE INSERT OR UPDATE ON images
 FOR EACH ROW
-EXECUTE FUNCTION prevent_duplicate_images();
+EXECUTE FUNCTION compute_hash_and_prevent_duplicate();
+
 
 
 -- Queue table to mark categories that need prototype recomputation
@@ -173,6 +167,5 @@ BEGIN
 
 END;
 $$;
-
 
 -- End of triggers.sql
