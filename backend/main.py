@@ -17,6 +17,7 @@ import logging
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+import asyncio
 
 # Fix OpenMP conflict
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -25,8 +26,9 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 load_dotenv()
 
 # Import our custom modules
-from .vector_processor import VectorSearchEngine, ImageEmbedder
-from .database import ImageSimilarityService, DatabaseConfig
+from backend.vector_processor import VectorSearchEngine, ImageEmbedder
+from backend.database import ImageSimilarityService, DatabaseConfig
+from backend.prototype_worker import start_background_worker
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -52,6 +54,8 @@ app.add_middleware(
 vector_engine: Optional[VectorSearchEngine] = None
 db_service: Optional[ImageSimilarityService] = None
 config: Dict[str, Any] = {}
+# Stop callable returned by the background worker starter
+worker_stopper = None
 
 # Pydantic models for API responses
 class ImageInfo(BaseModel):
@@ -124,12 +128,32 @@ async def startup_event():
             logger.info(f"Loaded FAISS index from {index_path}")
         else:
             logger.warning(f"FAISS index not found at {index_path}. Run initialization script first.")
+
+        # Start background worker that processes prototype/vector queues
+        try:
+            interval = int(os.getenv('WORKER_INTERVAL', 30))
+            # start_background_worker returns an async 'stop' coroutine when awaited
+            global worker_stopper
+            worker_stopper = await start_background_worker(db_service, vector_engine, config, interval=interval)
+        except Exception as e:
+            logger.warning(f"Failed to start prototype worker: {e}")
         
         logger.info("Application startup completed successfully")
         
     except Exception as e:
         logger.error(f"Error during startup: {e}")
         raise
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Shutdown hook to stop background worker cleanly."""
+    global worker_stopper
+    if worker_stopper is not None:
+        try:
+            await worker_stopper()
+        except Exception as e:
+            logger.warning(f"Error while stopping worker: {e}")
 
 
 def load_config() -> Dict[str, Any]:
@@ -140,7 +164,7 @@ def load_config() -> Dict[str, Any]:
         "db_port": int(os.getenv("DB_PORT", 5432)),
         "db_name": os.getenv("DB_NAME", "imsrc"),
         "db_user": os.getenv("DB_USER", "postgres"),
-        "db_password": os.getenv("DB_PASSWORD", "14789"),
+        "db_password": os.getenv("DB_PASSWORD", "postgres123"),
         "model_name": os.getenv("MODEL_NAME", "resnet18"),
         "faiss_index_path": os.getenv("FAISS_INDEX_PATH", "data/faiss_index.bin"),
         "max_upload_size": int(os.getenv("MAX_UPLOAD_SIZE", 10 * 1024 * 1024)),  # 10MB
@@ -553,6 +577,110 @@ async def rebuild_prototypes():
     except Exception as e:
         logger.error(f"Error rebuilding prototypes: {e}")
         raise HTTPException(status_code=500, detail=f"Error rebuilding prototypes: {str(e)}")
+
+
+@app.get("/admin/queues")
+async def admin_get_queues(limit: int = 100):
+    """Return current queued prototype and deletion entries (for operators)."""
+    try:
+        proto_rows = []
+        del_rows = []
+
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT category_id, last_updated FROM prototype_recompute_queue ORDER BY last_updated LIMIT %s", (limit,))
+                proto_rows = cur.fetchall()
+                cur.execute("SELECT image_id, queued_at FROM vector_deletion_queue ORDER BY queued_at LIMIT %s", (limit,))
+                del_rows = cur.fetchall()
+
+        def _fmt_proto(r):
+            return {"category_id": r[0], "last_updated": (r[1].isoformat() if hasattr(r[1], 'isoformat') else str(r[1]))}
+
+        def _fmt_del(r):
+            return {"image_id": r[0], "queued_at": (r[1].isoformat() if hasattr(r[1], 'isoformat') else str(r[1]))}
+
+        return {
+            "prototype_recompute_queue": [_fmt_proto(r) for r in proto_rows],
+            "vector_deletion_queue": [_fmt_del(r) for r in del_rows],
+            "prototype_queue_count": len(proto_rows),
+            "deletion_queue_count": len(del_rows)
+        }
+
+    except Exception as e:
+        logger.exception(f"Error fetching admin queues: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching admin queues")
+
+
+@app.post("/admin/process-queues")
+async def admin_process_queues(process_prototypes: bool = True, process_deletions: bool = True):
+    """Force immediate processing of queues (runs the same work as the background worker).
+
+    This endpoint offloads heavy tasks to threads to avoid blocking the event loop.
+    """
+    result = {"processed_prototypes": [], "processed_deletions": 0}
+
+    try:
+        # Process prototype queue
+        if process_prototypes:
+            with db_service.db_manager.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT category_id FROM prototype_recompute_queue ORDER BY last_updated")
+                    proto_rows = cur.fetchall()
+
+            category_ids = [r[0] for r in proto_rows] if proto_rows else []
+
+            for cat_id in category_ids:
+                try:
+                    await asyncio.to_thread(db_service.prototype_manager.create_prototype_for_category, cat_id)
+                    # remove from queue
+                    with db_service.db_manager.get_connection() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("DELETE FROM prototype_recompute_queue WHERE category_id = %s", (cat_id,))
+                            conn.commit()
+                    result["processed_prototypes"].append(cat_id)
+                except Exception as e:
+                    logger.exception(f"Failed to process prototype for category {cat_id}: {e}")
+
+        # Process deletion queue
+        if process_deletions:
+            with db_service.db_manager.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT image_id FROM vector_deletion_queue ORDER BY queued_at")
+                    del_rows = cur.fetchall()
+
+            to_delete_ids = [r[0] for r in del_rows] if del_rows else []
+
+            if to_delete_ids:
+                # Build FAISS index from current images (offload to thread)
+                all_images = db_service.image_manager.get_all_images()
+                images_data = []
+                for img in all_images:
+                    img_data = img['image_data']
+                    if isinstance(img_data, memoryview):
+                        img_data = img_data.tobytes()
+                    images_data.append((img['image_id'], img_data))
+
+                index_path = config.get('faiss_index_path', 'data/faiss_index.bin')
+                index_type = config.get('faiss_index_type', 'flatl2')
+                # Offload index build
+                try:
+                    await asyncio.to_thread(vector_engine.build_index, images_data, index_type, index_path)
+                    index_id = db_service.faiss_index_manager.register_index(index_type, str(index_path))
+                    db_service.faiss_index_manager.update_vector_index_ids(index_id)
+                    # Clear deletion queue
+                    with db_service.db_manager.get_connection() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("DELETE FROM vector_deletion_queue")
+                            conn.commit()
+                    result["processed_deletions"] = len(to_delete_ids)
+                except Exception as e:
+                    logger.exception(f"Failed to process vector deletions: {e}")
+
+        return result
+
+    except Exception as e:
+        logger.exception(f"Error processing queues: {e}")
+        raise HTTPException(status_code=500, detail="Error processing queues")
 
 
 # Mount static files (for frontend)

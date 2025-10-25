@@ -39,6 +39,17 @@ def setup_database(service: ImageSimilarityService, schema_path: str = None):
     try:
         service.setup_database(str(schema_path))
         logger.info("Database setup completed successfully")
+
+        # Apply additional DB triggers/scripts if present
+        trigger_path = Path(__file__).parent / "triggers.sql"
+        if os.path.exists(trigger_path):
+            try:
+                logger.info(f"Applying DB triggers from: {trigger_path}")
+                service.db_manager.execute_script(str(trigger_path))
+                logger.info("DB triggers applied successfully")
+            except Exception as e:
+                logger.warning(f"Failed to apply DB triggers: {e}")
+
         return True
     except Exception as e:
         # If tables already exist, that's okay
@@ -46,6 +57,16 @@ def setup_database(service: ImageSimilarityService, schema_path: str = None):
             logger.info("Database tables already exist, skipping schema creation")
             # Still ensure CIFAR-10 categories exist
             service.category_manager.ensure_cifar10_categories()
+            # Even if tables exist, ensure triggers/scripts are applied if present
+            trigger_path = Path(__file__).parent / "triggers.sql"
+            if os.path.exists(trigger_path):
+                try:
+                    logger.info(f"Applying DB triggers from: {trigger_path}")
+                    service.db_manager.execute_script(str(trigger_path))
+                    logger.info("DB triggers applied successfully")
+                except Exception as e2:
+                    logger.warning(f"Failed to apply DB triggers: {e2}")
+
             return True
         else:
             logger.error(f"Database setup failed: {e}")

@@ -20,13 +20,26 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class DatabaseConfig:
-    """Database configuration."""
-    host: str = "localhost"
-    port: int = 5432
-    dbname: str = "imsrc"
-    user: str = "postgres"
-    password: str = "14789"
-    
+    """Database configuration.
+
+    Values default to environment variables when not provided so that
+    creating `DatabaseConfig()` picks up settings from `.env` or the
+    environment (matching `backend/config.py`).
+    """
+    host: str = None
+    port: int = None
+    dbname: str = None
+    user: str = None
+    password: str = None
+
+    def __post_init__(self):
+        # Read from environment if values not explicitly provided
+        self.host = self.host or os.getenv("DB_HOST", "localhost")
+        self.port = int(self.port or os.getenv("DB_PORT", 5432))
+        self.dbname = self.dbname or os.getenv("DB_NAME", "imsrc")
+        self.user = self.user or os.getenv("DB_USER", "postgres")
+        self.password = self.password or os.getenv("DB_PASSWORD", "postgres123")
+
     def get_connection_string(self) -> str:
         return f"host={self.host} port={self.port} dbname={self.dbname} user={self.user} password={self.password}"
 

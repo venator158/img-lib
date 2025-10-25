@@ -85,7 +85,7 @@ def populate_images(num_images: int = 1000,
             "port": 5432,
             "dbname": "imsrc",
             "user": "postgres",
-            "password": "14789"
+            "password": "postgres123"
         }
     
     logger.info("Loading CIFAR-10 dataset...")
@@ -229,7 +229,7 @@ def check_database_status(db_config: Dict[str, str] = None) -> Dict[str, Any]:
             "port": 5432,
             "dbname": "imsrc",
             "user": "postgres",
-            "password": "14789"
+            "password": "postgres123"
         }
     
     try:
@@ -286,7 +286,7 @@ def main():
     parser.add_argument("--db-port", type=int, default=5432, help="Database port")
     parser.add_argument("--db-name", default="imsrc", help="Database name")
     parser.add_argument("--db-user", default="postgres", help="Database user")
-    parser.add_argument("--db-password", default="14789", help="Database password")
+    parser.add_argument("--db-password", default="postgres123", help="Database password")
     parser.add_argument("--status", action="store_true", help="Check database status only")
     
     args = parser.parse_args()

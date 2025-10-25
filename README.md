@@ -91,10 +91,9 @@ python db/populate_cifar10.py --num-images 1000
 python db/init_system.py --all
 ```
 
-5. **Start server**:
+5. **Start server** (from the project root!):
 ```bash
-cd backend
-python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ## Usage
@@ -215,6 +214,32 @@ img-lib/
 ├── requirements.txt        # Python dependencies
 └── .env                   # Configuration
 ```
+
+## Admin endpoints (queues & manual processing)
+
+Two new administrative endpoints are available (useful for operators):
+
+- GET /admin/queues
+   - Returns current queued rows for prototype recomputation and vector deletions, including a small sample and counts.
+   - Useful to inspect pending work created by the DB triggers.
+
+- POST /admin/process-queues
+   - Force immediate processing of both queues. By default it processes both prototype and deletion queues.
+   - This endpoint offloads heavy computation (prototype recompute and FAISS index builds) to background threads and returns a JSON summary of work performed.
+
+Example (inspect queues):
+```bash
+curl "http://localhost:8000/admin/queues"
+```
+
+Example (process queues now):
+```bash
+curl -X POST "http://localhost:8000/admin/process-queues"
+```
+
+Notes:
+- These endpoints are intended for operators and should be protected in production (authentication/authorization).
+- The worker that normally processes these queues runs automatically when the FastAPI app starts. These endpoints are useful for manual intervention or troubleshooting.
 
 ### Adding New Models
 
