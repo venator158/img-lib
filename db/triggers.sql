@@ -137,35 +137,34 @@ BEGIN
  DROP TRIGGER IF EXISTS trg_images_update_count ON images;
  CREATE TRIGGER trg_images_update_count AFTER INSERT OR DELETE ON images FOR EACH ROW EXECUTE FUNCTION update_category_image_count();
 
- -- Stored procedure to delete vectors by image ID
 CREATE OR REPLACE PROCEDURE delete_image_vectors(p_image_id INT)
 LANGUAGE plpgsql
 AS $$
 DECLARE
     v_vector_id INT;
 BEGIN
-    -- Loop through all vectors for the given image
+    -- Queue each vector for deletion
     FOR v_vector_id IN 
         SELECT vector_id FROM vectors WHERE image_id = p_image_id
     LOOP
-        -- Add each vector to the deletion queue
-        INSERT INTO vector_deletion_queue (vector_id, queued_at)
-        VALUES (v_vector_id, NOW());
+        INSERT INTO vector_deletion_queue (image_id, queued_at)
+        VALUES (p_image_id, NOW());
 
-        -- Optionally delete the vector immediately from vectors table
         DELETE FROM vectors WHERE vector_id = v_vector_id;
     END LOOP;
 
-    -- If the image affects a category prototype, add it to the prototype recompute queue
-    INSERT INTO prototype_recompute_queue (category_id, queued_at)
+    -- Queue category for prototype recompute
+    INSERT INTO prototype_recompute_queue (category_id, last_updated)
     SELECT category_id, NOW() 
     FROM images 
-    WHERE image_id = p_image_id;
+    WHERE image_id = p_image_id
+    ON CONFLICT (category_id) 
+    DO UPDATE SET last_updated = EXCLUDED.last_updated;
 
-    -- Finally, delete the image itself
+    -- Delete the image itself
     DELETE FROM images WHERE image_id = p_image_id;
-
 END;
 $$;
+
 
 -- End of triggers.sql
