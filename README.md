@@ -166,6 +166,8 @@ API_PORT=8000
 - **vectors**: Feature embeddings for each image
 - **_category_prototypes**: Averaged embeddings per category
 - **faiss**: FAISS index metadata
+- **prototype_recompute_queue**: prototype embedding recomputed when vectors in a category are added, updated, or deleted
+- **vector_deletion_queue**: vector IDs that need to be deleted from FAISS
 
 ### Example Queries
 
