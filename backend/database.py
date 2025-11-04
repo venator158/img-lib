@@ -145,12 +145,24 @@ class ImageManager:
         with self.db_manager.get_connection() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("""
-                    SELECT i.image_id, i.image_data, i.metadata, i.category_id, c.category_name
-                    FROM images i
-                    JOIN categories c ON i.category_id = c.category_id
-                    LEFT JOIN vectors v ON i.image_id = v.image_id
-                    WHERE v.image_id IS NULL
-                    ORDER BY i.image_id
+                    SELECT 
+                    i.image_id, 
+                    i.image_data, 
+                    i.metadata, 
+                    i.category_id, 
+                    c.category_name,
+                    cat_stats.total_images_in_category
+                FROM images i
+                JOIN categories c ON i.category_id = c.category_id
+                JOIN (
+                    SELECT category_id, COUNT(*) AS total_images_in_category
+                    FROM images
+                    GROUP BY category_id
+                ) AS cat_stats ON i.category_id = cat_stats.category_id
+                WHERE i.image_id NOT IN (
+                    SELECT image_id FROM vectors
+                )
+                ORDER BY i.image_id;
                 """)
                 return [dict(row) for row in cur.fetchall()]
 
