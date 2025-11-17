@@ -20,7 +20,7 @@ class Config:
     DB_PORT: int = int(os.getenv("DB_PORT", 5432))
     DB_NAME: str = os.getenv("DB_NAME", "imsrc")
     DB_USER: str = os.getenv("DB_USER", "postgres")
-    DB_PASSWORD: str = os.getenv("DB_PASSWORD", "postgres123")
+    DB_PASSWORD: str = os.getenv("DB_PASSWORD", "14789")
     
     # Model Configuration
     MODEL_NAME: str = os.getenv("MODEL_NAME", "resnet50")

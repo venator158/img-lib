@@ -15,9 +15,25 @@ import base64
 from PIL import Image
 import logging
 import os
+import json
+import time
 from pathlib import Path
 from dotenv import load_dotenv
 import asyncio
+
+def log_sql_event(query_type: str, operation: str, **kwargs):
+    """Log structured JSON event for SQL operations"""
+    log_data = {
+        "ts": time.time(),
+        "module": "main_api",
+        "query_type": query_type,
+        "operation": operation,
+        **kwargs
+    }
+    # Extract and display the SQL query prominently
+    sql_query = kwargs.get('sql', 'N/A')
+    print(f"[{query_type}] {sql_query}")
+    print(f"SQL_EVENT: {json.dumps(log_data)}")
 
 # Fix OpenMP conflict
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -164,7 +180,7 @@ def load_config() -> Dict[str, Any]:
         "db_port": int(os.getenv("DB_PORT", 5432)),
         "db_name": os.getenv("DB_NAME", "imsrc"),
         "db_user": os.getenv("DB_USER", "postgres"),
-        "db_password": os.getenv("DB_PASSWORD", "postgres123"),
+        "db_password": os.getenv("DB_PASSWORD", "14789"),
         "model_name": os.getenv("MODEL_NAME", "resnet18"),
         "faiss_index_path": os.getenv("FAISS_INDEX_PATH", "data/faiss_index.bin"),
         "max_upload_size": int(os.getenv("MAX_UPLOAD_SIZE", 10 * 1024 * 1024)),  # 10MB
@@ -635,6 +651,7 @@ async def admin_process_queues(process_prototypes: bool = True, process_deletion
                     # remove from queue
                     with db_service.db_manager.get_connection() as conn:
                         with conn.cursor() as cur:
+                            log_sql_event("DELETE", "api_prototype_queue_cleanup", category_id=cat_id)
                             cur.execute("DELETE FROM prototype_recompute_queue WHERE category_id = %s", (cat_id,))
                             conn.commit()
                     result["processed_prototypes"].append(cat_id)
@@ -670,8 +687,11 @@ async def admin_process_queues(process_prototypes: bool = True, process_deletion
                     # Clear deletion queue
                     with db_service.db_manager.get_connection() as conn:
                         with conn.cursor() as cur:
+                            log_sql_event("DELETE", "api_vector_deletion_queue_clear")
                             cur.execute("DELETE FROM vector_deletion_queue")
+                            rows_deleted = cur.rowcount
                             conn.commit()
+                            log_sql_event("DELETE", "api_vector_deletion_queue_cleared", rows_deleted=rows_deleted)
                     result["processed_deletions"] = len(to_delete_ids)
                 except Exception as e:
                     logger.exception(f"Failed to process vector deletions: {e}")

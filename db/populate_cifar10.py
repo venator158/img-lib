@@ -20,6 +20,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+def log_sql_event(query_type: str, operation: str, **kwargs):
+    """Log structured JSON event for SQL operations"""
+    log_data = {
+        "ts": time.time(),
+        "module": "populate_cifar10",
+        "query_type": query_type,
+        "operation": operation,
+        **kwargs
+    }
+    # Extract and display the SQL query prominently
+    sql_query = kwargs.get('sql', 'N/A')
+    print(f"[{query_type}] {sql_query}")
+    print(f"SQL_EVENT: {json.dumps(log_data)}")
+
 # CIFAR-10 class names
 CIFAR10_CLASSES = {
     0: 'airplane',
@@ -52,6 +66,8 @@ def ensure_categories_exist(cursor) -> bool:
         for class_id, class_name in CIFAR10_CLASSES.items():
             category_id = class_id + 1  # Database uses 1-based indexing
             
+            log_sql_event("UPDATE", "ensure_category_upsert", category_id=category_id, category_name=class_name,
+                         sql="INSERT INTO categories ON CONFLICT DO UPDATE")
             cursor.execute("""
                 INSERT INTO categories (category_id, category_name)
                 VALUES (%s, %s)
@@ -85,7 +101,7 @@ def populate_images(num_images: int = 1000,
             "port": 5432,
             "dbname": "imsrc",
             "user": "postgres",
-            "password": "postgres123"
+            "password": "14789"
         }
     
     logger.info("Loading CIFAR-10 dataset...")
@@ -180,6 +196,10 @@ def populate_images(num_images: int = 1000,
             # Insert batch
             if batch_data:
                 try:
+                    log_sql_event("INSERT", "insert_images_batch", batch_size=len(batch_data),
+                                 sql="INSERT INTO images (image_data, metadata, category_id) VALUES (%s, %s::jsonb, %s)")
+                    log_sql_event("TRIGGER", "batch_insert_triggers", 
+                                 sql=f"Each INSERT fires: trg_compute_hash_and_prevent_duplicate (BEFORE), trg_images_update_count (AFTER) - {len(batch_data)} times")
                     cur.executemany("""
                         INSERT INTO images (image_data, metadata, category_id)
                         VALUES (%s, %s::jsonb, %s)
@@ -229,7 +249,7 @@ def check_database_status(db_config: Dict[str, str] = None) -> Dict[str, Any]:
             "port": 5432,
             "dbname": "imsrc",
             "user": "postgres",
-            "password": "postgres123"
+            "password": "14789"
         }
     
     try:
@@ -251,6 +271,8 @@ def check_database_status(db_config: Dict[str, str] = None) -> Dict[str, Any]:
         prototypes_count = cur.fetchone()[0]
         
         # Get category breakdown
+        log_sql_event("AGGREGATE", "category_breakdown_stats", 
+                     sql="SELECT c.category_name, COUNT(i.image_id) FROM categories c LEFT JOIN images i GROUP BY c.category_id, c.category_name")
         cur.execute("""
             SELECT c.category_name, COUNT(i.image_id) as image_count
             FROM categories c
@@ -259,6 +281,7 @@ def check_database_status(db_config: Dict[str, str] = None) -> Dict[str, Any]:
             ORDER BY c.category_id
         """)
         category_breakdown = cur.fetchall()
+        log_sql_event("AGGREGATE", "category_breakdown_result", categories_found=len(category_breakdown))
         
         cur.close()
         conn.close()
@@ -286,7 +309,7 @@ def main():
     parser.add_argument("--db-port", type=int, default=5432, help="Database port")
     parser.add_argument("--db-name", default="imsrc", help="Database name")
     parser.add_argument("--db-user", default="postgres", help="Database user")
-    parser.add_argument("--db-password", default="postgres123", help="Database password")
+    parser.add_argument("--db-password", default="14789", help="Database password")
     parser.add_argument("--status", action="store_true", help="Check database status only")
     
     args = parser.parse_args()

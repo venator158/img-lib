@@ -1,10 +1,26 @@
 import asyncio
 import logging
 import os
+import json
+import time
 from pathlib import Path
 from typing import Dict, Any, List
 
 logger = logging.getLogger(__name__)
+
+def log_sql_event(query_type: str, operation: str, **kwargs):
+    """Log structured JSON event for SQL operations"""
+    log_data = {
+        "ts": time.time(),
+        "module": "prototype_worker",
+        "query_type": query_type,
+        "operation": operation,
+        **kwargs
+    }
+    # Extract and display the SQL query prominently
+    sql_query = kwargs.get('sql', 'N/A')
+    print(f"[{query_type}] {sql_query}")
+    print(f"SQL_EVENT: {json.dumps(log_data)}")
 
 
 async def start_background_worker(service, vector_engine, config: Dict[str, Any], interval: int = 30):
@@ -39,6 +55,7 @@ async def start_background_worker(service, vector_engine, config: Dict[str, Any]
                             # Remove from queue on success
                             with service.db_manager.get_connection() as conn:
                                 with conn.cursor() as cur:
+                                    log_sql_event("DELETE", "prototype_queue_cleanup", category_id=cat_id, sql="DELETE FROM prototype_recompute_queue WHERE category_id = %s")
                                     cur.execute("DELETE FROM prototype_recompute_queue WHERE category_id = %s", (cat_id,))
                                     conn.commit()
                             logger.info(f"Prototype recompute completed for category {cat_id}")
@@ -85,8 +102,11 @@ async def start_background_worker(service, vector_engine, config: Dict[str, Any]
                             # Clear deletion queue
                             with service.db_manager.get_connection() as conn:
                                 with conn.cursor() as cur:
+                                    log_sql_event("DELETE", "vector_deletion_queue_clear", sql="DELETE FROM vector_deletion_queue")
                                     cur.execute("DELETE FROM vector_deletion_queue")
+                                    deleted_count = cur.rowcount
                                     conn.commit()
+                                    log_sql_event("DELETE", "vector_deletion_queue_cleared", rows_deleted=deleted_count)
 
                             logger.info(f"FAISS index rebuilt and registered (index_id={index_id})")
                         except Exception as e:

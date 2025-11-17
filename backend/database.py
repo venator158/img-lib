@@ -9,6 +9,7 @@ import numpy as np
 from typing import List, Dict, Tuple, Optional, Any
 import json
 import logging
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 import os
@@ -17,6 +18,20 @@ from pathlib import Path
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def log_sql_event(query_type: str, operation: str, **kwargs):
+    """Log structured JSON event for SQL operations"""
+    log_data = {
+        "ts": time.time(),
+        "module": "database",
+        "query_type": query_type,
+        "operation": operation,
+        **kwargs
+    }
+    # Extract and display the SQL query prominently
+    sql_query = kwargs.get('sql', 'N/A')
+    print(f"[{query_type}] {sql_query}")
+    print(f"SQL_EVENT: {json.dumps(log_data)}")
 
 @dataclass
 class DatabaseConfig:
@@ -38,7 +53,7 @@ class DatabaseConfig:
         self.port = int(self.port or os.getenv("DB_PORT", 5432))
         self.dbname = self.dbname or os.getenv("DB_NAME", "imsrc")
         self.user = self.user or os.getenv("DB_USER", "postgres")
-        self.password = self.password or os.getenv("DB_PASSWORD", "postgres123")
+        self.password = self.password or os.getenv("DB_PASSWORD", "14789")
 
     def get_connection_string(self) -> str:
         return f"host={self.host} port={self.port} dbname={self.dbname} user={self.user} password={self.password}"
@@ -130,6 +145,10 @@ class ImageManager:
         
         with self.db_manager.get_connection() as conn:
             with conn.cursor() as cur:
+                log_sql_event("INSERT", "insert_image", category_id=category_id, 
+                             sql="INSERT INTO images (image_data, metadata, category_id) VALUES (%s, %s::jsonb, %s) RETURNING image_id")
+                log_sql_event("TRIGGER", "insert_image_triggers", 
+                             sql="BEFORE INSERT: trg_compute_hash_and_prevent_duplicate, AFTER INSERT: trg_images_update_count")
                 cur.execute("""
                     INSERT INTO images (image_data, metadata, category_id)
                     VALUES (%s, %s::jsonb, %s)
@@ -138,12 +157,16 @@ class ImageManager:
                 
                 image_id = cur.fetchone()[0]
                 conn.commit()
+                log_sql_event("INSERT", "insert_image_result", image_id=image_id, category_id=category_id)
                 return image_id
     
     def get_images_without_vectors(self) -> List[Dict[str, Any]]:
         """Get images that don't have corresponding vectors."""
         with self.db_manager.get_connection() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                log_sql_event("NESTED", "get_images_without_vectors", 
+                             sql="SELECT with NOT IN subquery and GROUP BY aggregate subquery",
+                             subqueries=["SELECT image_id FROM vectors", "SELECT category_id, COUNT(*) FROM images GROUP BY category_id"])
                 cur.execute("""
                     SELECT 
                     i.image_id, 
@@ -164,7 +187,9 @@ class ImageManager:
                 )
                 ORDER BY i.image_id;
                 """)
-                return [dict(row) for row in cur.fetchall()]
+                result = [dict(row) for row in cur.fetchall()]
+                log_sql_event("NESTED", "get_images_without_vectors_result", rows_found=len(result))
+                return result
 
 
 class VectorManager:
@@ -182,6 +207,10 @@ class VectorManager:
         
         with self.db_manager.get_connection() as conn:
             with conn.cursor() as cur:
+                log_sql_event("INSERT", "insert_vector", image_id=image_id, index_id=index_id,
+                             sql="INSERT INTO vectors (embedding, image_id, index_id) VALUES (%s::vector, %s, %s) RETURNING vector_id")
+                log_sql_event("TRIGGER", "insert_vector_triggers", 
+                             sql="AFTER INSERT: trg_vectors_mark_prototype")
                 cur.execute("""
                     INSERT INTO vectors (embedding, image_id, index_id)
                     VALUES (%s::vector, %s, %s)
@@ -190,6 +219,7 @@ class VectorManager:
                 
                 vector_id = cur.fetchone()[0]
                 conn.commit()
+                log_sql_event("INSERT", "insert_vector_result", vector_id=vector_id, image_id=image_id)
                 return vector_id
     
     def insert_vectors_batch(self, vectors_data: List[Tuple[np.ndarray, int, Optional[int]]]):
@@ -202,11 +232,16 @@ class VectorManager:
         
         with self.db_manager.get_connection() as conn:
             with conn.cursor() as cur:
+                log_sql_event("INSERT", "insert_vectors_batch", batch_size=len(vectors_data),
+                             sql="INSERT INTO vectors (embedding, image_id, index_id) VALUES (%s::vector, %s, %s)")
+                log_sql_event("TRIGGER", "insert_vectors_batch_triggers", 
+                             sql=f"AFTER INSERT (batch of {len(vectors_data)}): trg_vectors_mark_prototype - queues prototype recompute")
                 execute_batch(cur, """
                     INSERT INTO vectors (embedding, image_id, index_id)
                     VALUES (%s::vector, %s, %s)
                 """, data_to_insert)
                 conn.commit()
+                log_sql_event("INSERT", "insert_vectors_batch_result", vectors_inserted=len(vectors_data))
         
         logger.info(f"Inserted {len(vectors_data)} vectors")
     
@@ -225,6 +260,8 @@ class VectorManager:
         """Get all vectors for images in a specific category."""
         with self.db_manager.get_connection() as conn:
             with conn.cursor() as cur:
+                log_sql_event("CORRELATED", "get_vectors_by_category", category_id=category_id,
+                             sql="SELECT v.image_id, v.embedding FROM vectors v JOIN images i ON v.image_id = i.image_id WHERE i.category_id = %s")
                 cur.execute("""
                     SELECT v.image_id, v.embedding
                     FROM vectors v
@@ -349,6 +386,9 @@ class PrototypeManager:
     
     def create_prototype_for_category(self, category_id: int) -> np.ndarray:
         """Create prototype vector for a category by averaging all vectors in that category."""
+        log_sql_event("AGGREGATE", "create_prototype_start", category_id=category_id)
+        log_sql_event("FUNCTION", "numpy_mean_aggregation", 
+                     sql="Python function: np.mean(embeddings_array, axis=0) - equivalent to SQL AVG aggregate")
         vectors_data = self.vector_manager.get_vectors_by_category(category_id)
         
         if not vectors_data:
@@ -367,6 +407,7 @@ class PrototypeManager:
         # Store prototype in database
         self.insert_prototype(category_id, prototype_vector)
         
+        log_sql_event("AGGREGATE", "create_prototype_complete", category_id=category_id, n_vectors=len(embeddings))
         logger.info(f"Created prototype for category {category_id} from {len(embeddings)} vectors")
         return prototype_vector
     
@@ -376,6 +417,8 @@ class PrototypeManager:
         
         with self.db_manager.get_connection() as conn:
             with conn.cursor() as cur:
+                log_sql_event("UPDATE", "insert_prototype_upsert", category_id=category_id,
+                             sql="INSERT INTO _category_prototypes ON CONFLICT DO UPDATE SET prototype_vector = EXCLUDED.prototype_vector")
                 cur.execute("""
                     INSERT INTO _category_prototypes (category_id, prototype_vector)
                     VALUES (%s, %s::vector)
@@ -383,6 +426,7 @@ class PrototypeManager:
                     DO UPDATE SET prototype_vector = EXCLUDED.prototype_vector;
                 """, (category_id, prototype_list))
                 conn.commit()
+                log_sql_event("UPDATE", "insert_prototype_complete", category_id=category_id)
     
     def get_prototype(self, category_id: int) -> Optional[np.ndarray]:
         """Get prototype vector for a category."""
@@ -466,6 +510,10 @@ class FaissIndexManager:
         """Register a FAISS index in the database."""
         with self.db_manager.get_connection() as conn:
             with conn.cursor() as cur:
+                log_sql_event("INSERT", "register_faiss_index", index_type=index_type, index_filepath=index_filepath,
+                             sql="INSERT INTO faiss (index_type, index_filepath) VALUES (%s, %s) RETURNING index_id")
+                log_sql_event("TRIGGER", "faiss_insert_trigger", 
+                             sql="AFTER INSERT: trg_faiss_after_insert - updates vectors.index_id WHERE index_id IS NULL")
                 cur.execute("""
                     INSERT INTO faiss (index_type, index_filepath)
                     VALUES (%s, %s)
@@ -496,11 +544,14 @@ class FaissIndexManager:
         """Update all vectors to reference a specific FAISS index."""
         with self.db_manager.get_connection() as conn:
             with conn.cursor() as cur:
+                log_sql_event("UPDATE", "update_vector_index_ids", index_id=index_id, 
+                             sql="UPDATE vectors SET index_id = %s WHERE index_id IS NULL")
                 cur.execute("""
                     UPDATE vectors SET index_id = %s WHERE index_id IS NULL
                 """, (index_id,))
+                rows_updated = cur.rowcount
                 conn.commit()
-                
+                log_sql_event("UPDATE", "update_vector_index_ids_result", index_id=index_id, rows_updated=rows_updated)
                 logger.info(f"Updated vectors to reference index {index_id}")
 
 

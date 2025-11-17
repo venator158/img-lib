@@ -9,7 +9,7 @@ import json
 def generate_metadata(idx):
     return {"source": "cifar10", "image_index": idx, "description": "32x32 color image"}
 
-conn = psycopg2.connect("dbname=imsrc user=postgres password=postgres123 host=localhost port=5432")
+conn = psycopg2.connect("dbname=imsrc user=postgres password=14789 host=localhost port=5432")
 cur = conn.cursor()
 
 for i in range(100):
