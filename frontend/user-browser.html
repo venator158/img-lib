@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Browser - Similarity Search</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            color: white;
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            font-size: 1.8rem;
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .logout-btn {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .logout-btn:hover {
+            background: rgba(255,255,255,0.3);
+            transform: translateY(-2px);
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 2rem auto;
+            padding: 0 2rem;
+        }
+
+        .search-panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .search-panel h2 {
+            color: #333;
+            margin-bottom: 1.5rem;
+            text-align: center;
+            font-size: 1.5rem;
+        }
+
+        .upload-area {
+            border: 3px dashed #667eea;
+            border-radius: 15px;
+            padding: 3rem;
+            text-align: center;
+            margin-bottom: 2rem;
+            transition: all 0.3s;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .upload-area:hover {
+            border-color: #764ba2;
+            background: rgba(102, 126, 234, 0.05);
+            transform: translateY(-5px);
+        }
+
+        .upload-area.dragover {
+            border-color: #28a745;
+            background: rgba(40, 167, 69, 0.1);
+        }
+
+        .upload-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+        }
+
+        .upload-text {
+            font-size: 1.1rem;
+            color: #666;
+            margin-bottom: 1rem;
+        }
+
+        .upload-subtext {
+            font-size: 0.9rem;
+            color: #999;
+        }
+
+        .file-input {
+            position: absolute;
+            opacity: 0;
+            width: 100%;
+            height: 100%;
+            cursor: pointer;
+        }
+
+        .search-options {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .option-group {
+            background: #f8f9fa;
+            padding: 1rem;
+            border-radius: 10px;
+        }
+
+        .option-group label {
+            display: block;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 0.5rem;
+        }
+
+        .option-group input,
+        .option-group select {
+            width: 100%;
+            padding: 0.5rem;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            font-size: 0.9rem;
+        }
+
+        .search-buttons {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 0.75rem 2rem;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 600;
+            transition: all 0.3s;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-secondary {
+            background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
+            color: #333;
+        }
+
+        .btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .results-panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 2rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            display: none;
+        }
+
+        .results-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #f1f3f4;
+        }
+
+        .results-title {
+            color: #333;
+            font-size: 1.3rem;
+        }
+
+        .results-stats {
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        .results-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .result-item {
+            background: white;
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+
+        .result-item:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 30px rgba(0,0,0,0.2);
+        }
+
+        .result-image {
+            width: 100%;
+            height: 200px;
+            object-fit: cover;
+            background: #f8f9fa;
+        }
+
+        .result-info {
+            padding: 1rem;
+        }
+
+        .result-category {
+            color: #667eea;
+            font-weight: 600;
+            font-size: 0.9rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .result-score {
+            color: #28a745;
+            font-weight: 600;
+        }
+
+        .result-meta {
+            color: #666;
+            font-size: 0.8rem;
+            margin-top: 0.5rem;
+        }
+
+        .loading-panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 3rem;
+            text-align: center;
+            display: none;
+        }
+
+        .spinner {
+            width: 60px;
+            height: 60px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            color: #666;
+            font-size: 1.1rem;
+        }
+
+        .error-panel {
+            background: rgba(248, 215, 218, 0.95);
+            color: #721c24;
+            padding: 1rem;
+            border-radius: 10px;
+            margin-bottom: 1rem;
+            display: none;
+        }
+
+        .success-panel {
+            background: rgba(212, 237, 218, 0.95);
+            color: #155724;
+            padding: 1rem;
+            border-radius: 10px;
+            margin-bottom: 1rem;
+            display: none;
+        }
+
+        .preview-image {
+            max-width: 200px;
+            max-height: 200px;
+            border-radius: 10px;
+            margin: 1rem 0;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+
+        .image-modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.9);
+            backdrop-filter: blur(5px);
+        }
+
+        .modal-content {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            border-radius: 15px;
+            padding: 2rem;
+            max-width: 90vw;
+            max-height: 90vh;
+            overflow: auto;
+        }
+
+        .modal-image {
+            max-width: 100%;
+            max-height: 60vh;
+            object-fit: contain;
+            border-radius: 10px;
+        }
+
+        .close-modal {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            background: rgba(0,0,0,0.5);
+            color: white;
+            border: none;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 1.2rem;
+        }
+
+        .stats-bar {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-around;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .stat-item {
+            text-align: center;
+            color: white;
+        }
+
+        .stat-number {
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+
+        .stat-label {
+            font-size: 0.9rem;
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🖼️ Image Similarity Browser</h1>
+        <div class="user-info">
+            <span id="welcomeMessage">👤 Welcome, User</span>
+            <button class="logout-btn" onclick="logout()">Logout</button>
+        </div>
+    </div>
+
+    <div class="stats-bar">
+        <div class="stat-item">
+            <div class="stat-number" id="totalImages">-</div>
+            <div class="stat-label">Total Images</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-number" id="totalCategories">-</div>
+            <div class="stat-label">Categories</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-number" id="searchTime">-</div>
+            <div class="stat-label">Last Search (ms)</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-number" id="resultsFound">-</div>
+            <div class="stat-label">Results Found</div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="search-panel">
+            <h2>🔍 Find Similar Images</h2>
+            
+            <div class="upload-area" onclick="document.getElementById('fileInput').click()">
+                <input type="file" id="fileInput" class="file-input" accept="image/*" onchange="handleFileSelect(event)">
+                <div class="upload-icon">📸</div>
+                <div class="upload-text">Drop an image here or click to browse</div>
+                <div class="upload-subtext">Supports JPG, PNG, GIF up to 10MB</div>
+            </div>
+
+            <div id="imagePreview"></div>
+
+            <div class="search-options">
+                <div class="option-group">
+                    <label>Number of Results</label>
+                    <select id="limitSelect">
+                        <option value="5">5 Results</option>
+                        <option value="10" selected>10 Results</option>
+                        <option value="20">20 Results</option>
+                        <option value="50">50 Results</option>
+                    </select>
+                </div>
+
+
+
+                <div class="option-group">
+                    <label>Top Categories</label>
+                    <select id="topCategories">
+                        <option value="3">Top 3 Categories</option>
+                        <option value="5" selected>Top 5 Categories</option>
+                        <option value="10">Top 10 Categories</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label>Filter by Category</label>
+                    <select id="categoryFilter">
+                        <option value="">All Categories</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="search-buttons">
+                <button class="btn btn-primary" id="searchBtn" onclick="performSearch()" disabled>
+                    🔍 Search Similar Images
+                </button>
+                <button class="btn btn-secondary" onclick="searchPrototypesOnly()" id="prototypeBtn" disabled>
+                    🎯 Search Prototypes Only
+                </button>
+            </div>
+        </div>
+
+        <div class="error-panel" id="errorPanel"></div>
+        <div class="success-panel" id="successPanel"></div>
+
+        <div class="loading-panel" id="loadingPanel">
+            <div class="spinner"></div>
+            <div class="loading-text">Searching for similar images...</div>
+        </div>
+
+        <div class="results-panel" id="resultsPanel">
+            <div class="results-header">
+                <h3 class="results-title">Search Results</h3>
+                <div class="results-stats" id="resultsStats"></div>
+            </div>
+            <div class="results-grid" id="resultsGrid"></div>
+        </div>
+    </div>
+
+    <!-- Image Modal -->
+    <div class="image-modal" id="imageModal">
+        <button class="close-modal" onclick="closeImageModal()">&times;</button>
+        <div class="modal-content">
+            <img id="modalImage" class="modal-image">
+            <div id="modalInfo"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        let currentFile = null;
+        let currentUser = null;
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            // Check authentication
+            const sessionId = localStorage.getItem('sessionId');
+            const userRole = localStorage.getItem('userRole');
+            const username = localStorage.getItem('username');
+
+            if (!sessionId) {
+                window.location.href = 'login.html';
+                return;
+            }
+
+            currentUser = { sessionId, userRole, username };
+            document.getElementById('welcomeMessage').textContent = `👤 Welcome, ${username}`;
+            
+            // Load initial data
+            loadStats();
+            loadCategories();
+            setupDragAndDrop();
+        });
+
+        async function loadStats() {
+            try {
+                const response = await fetch(`${API_BASE}/status`);
+                const stats = await response.json();
+                
+                document.getElementById('totalImages').textContent = stats.images || 0;
+                document.getElementById('totalCategories').textContent = stats.categories || 0;
+                
+            } catch (error) {
+                console.error('Error loading stats:', error);
+            }
+        }
+
+        async function loadCategories() {
+            try {
+                const response = await fetch(`${API_BASE}/categories`);
+                const data = await response.json();
+                const categories = data.categories || [];
+                
+                const select = document.getElementById('categoryFilter');
+                select.innerHTML = '<option value="">All Categories</option>';
+                
+                categories.forEach(cat => {
+                    select.innerHTML += `<option value="${cat.category_id}">${cat.category_name}</option>`;
+                });
+                
+            } catch (error) {
+                console.error('Error loading categories:', error);
+            }
+        }
+
+        function setupDragAndDrop() {
+            const uploadArea = document.querySelector('.upload-area');
+            
+            uploadArea.addEventListener('dragover', function(e) {
+                e.preventDefault();
+                uploadArea.classList.add('dragover');
+            });
+            
+            uploadArea.addEventListener('dragleave', function(e) {
+                e.preventDefault();
+                uploadArea.classList.remove('dragover');
+            });
+            
+            uploadArea.addEventListener('drop', function(e) {
+                e.preventDefault();
+                uploadArea.classList.remove('dragover');
+                
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    handleFile(files[0]);
+                }
+            });
+        }
+
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (file) {
+                handleFile(file);
+            }
+        }
+
+        function handleFile(file) {
+            if (!file.type.startsWith('image/')) {
+                showError('Please select an image file');
+                return;
+            }
+            
+            if (file.size > 10 * 1024 * 1024) { // 10MB
+                showError('File size should be less than 10MB');
+                return;
+            }
+
+            currentFile = file;
+            
+            // Show preview
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const preview = document.getElementById('imagePreview');
+                preview.innerHTML = `
+                    <div style="text-align: center;">
+                        <img src="${e.target.result}" class="preview-image">
+                        <p><strong>Selected:</strong> ${file.name} (${formatFileSize(file.size)})</p>
+                    </div>
+                `;
+            };
+            reader.readAsDataURL(file);
+            
+            // Enable search buttons
+            document.getElementById('searchBtn').disabled = false;
+            document.getElementById('prototypeBtn').disabled = false;
+            
+            showSuccess('Image loaded successfully! Ready to search.');
+        }
+
+        async function performSearch() {
+            if (!currentFile) {
+                showError('Please select an image first');
+                return;
+            }
+            
+            const limit = document.getElementById('limitSelect').value;
+            const topCategories = document.getElementById('topCategories').value;
+            const usePrototypes = false; // Always use similarity search
+            
+            const formData = new FormData();
+            formData.append('file', currentFile);
+            
+            const params = new URLSearchParams({
+                limit: limit,
+                use_prototypes: usePrototypes,
+                top_categories: topCategories
+            });
+            
+            try {
+                showLoading(true);
+                
+                const startTime = Date.now();
+                const response = await fetch(`${API_BASE}/search?${params}`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const searchTime = Date.now() - startTime;
+                document.getElementById('searchTime').textContent = searchTime;
+                
+                if (response.ok) {
+                    const results = await response.json();
+                    displayResults(results, searchTime);
+                } else {
+                    const error = await response.json();
+                    showError(error.detail || 'Search failed');
+                }
+                
+            } catch (error) {
+                console.error('Search error:', error);
+                showError('Search failed. Please check your connection.');
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        async function searchPrototypesOnly() {
+            if (!currentFile) {
+                showError('Please select an image first');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('file', currentFile);
+            
+            try {
+                showLoading(true);
+                
+                const startTime = Date.now();
+                const response = await fetch(`${API_BASE}/search-prototypes`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const searchTime = Date.now() - startTime;
+                document.getElementById('searchTime').textContent = searchTime;
+                
+                if (response.ok) {
+                    const prototypeResults = await response.json();
+                    
+                    // Convert prototype results to display format
+                    const results = {
+                        results: prototypeResults.prototypes?.map((proto, index) => ({
+                            image_id: null, // No specific image for prototypes
+                            category_name: proto.category_name,
+                            similarity_score: proto.similarity_score,
+                            metadata: { prototype: true, category_id: proto.category_id },
+                            display_text: `${proto.category_name} - ${(proto.similarity_score * 100).toFixed(1)}% match`
+                        })) || [],
+                        search_time: prototypeResults.search_time || searchTime,
+                        query_info: { method: 'prototype_search' }
+                    };
+                    
+                    displayPrototypeResults(results, searchTime);
+                } else {
+                    const error = await response.json();
+                    showError(error.detail || 'Prototype search failed');
+                }
+                
+            } catch (error) {
+                console.error('Prototype search error:', error);
+                showError('Prototype search failed. Please check your connection.');
+            } finally {
+                showLoading(false);
+            }
+        }
+
+
+
+        function displayPrototypeResults(results, searchTime) {
+            const resultsPanel = document.getElementById('resultsPanel');
+            const resultsGrid = document.getElementById('resultsGrid');
+            const resultsStats = document.getElementById('resultsStats');
+            
+            // Update stats
+            document.getElementById('resultsFound').textContent = results.results?.length || 0;
+            
+            // Show results panel
+            resultsPanel.style.display = 'block';
+            
+            // Update stats text
+            resultsStats.textContent = `Found ${results.results?.length || 0} matching categories in ${searchTime}ms using prototype search`;
+            
+            // Clear previous results
+            resultsGrid.innerHTML = '';
+            
+            if (results.results && results.results.length > 0) {
+                results.results.forEach((result, index) => {
+                    const resultItem = document.createElement('div');
+                    resultItem.className = 'result-item';
+                    
+                    const scoreText = `${(result.similarity_score * 100).toFixed(1)}% Match`;
+                    
+                    resultItem.innerHTML = `
+                        <div class="result-image" style="display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-size: 2rem;">
+                            🎯
+                        </div>
+                        <div class="result-info">
+                            <div class="result-category">${result.category_name || 'Unknown'}</div>
+                            <div class="result-score">${scoreText}</div>
+                            <div class="result-meta">Category Prototype Match</div>
+                        </div>
+                    `;
+                    
+                    resultsGrid.appendChild(resultItem);
+                });
+                
+                showSuccess(`Found ${results.results.length} matching category prototypes!`);
+            } else {
+                resultsGrid.innerHTML = '<p style="text-align: center; color: #666; grid-column: 1/-1;">No prototype matches found. Try a different image.</p>';
+            }
+        }
+        
+        function displayResults(results, searchTime) {
+            const resultsPanel = document.getElementById('resultsPanel');
+            const resultsGrid = document.getElementById('resultsGrid');
+            const resultsStats = document.getElementById('resultsStats');
+            
+            // Update stats
+            document.getElementById('resultsFound').textContent = results.results?.length || 0;
+            
+            // Show results panel
+            resultsPanel.style.display = 'block';
+            
+            // Update stats text
+            const method = results.query_info?.method || 'similarity';
+            resultsStats.textContent = `Found ${results.results?.length || 0} results in ${searchTime}ms using ${method} search`;
+            
+            // Clear previous results
+            resultsGrid.innerHTML = '';
+            
+            if (results.results && results.results.length > 0) {
+                results.results.forEach((result, index) => {
+                    const resultItem = document.createElement('div');
+                    resultItem.className = 'result-item';
+                    resultItem.onclick = () => showImageModal(result);
+                    
+                    const scoreText = result.similarity_score !== null 
+                        ? `Score: ${(result.similarity_score * 100).toFixed(1)}%`
+                        : `#${index + 1}`;
+                    
+                    resultItem.innerHTML = `
+                        <img class="result-image" 
+                             src="${API_BASE}/images/${result.image_id}/thumbnail" 
+                             alt="${result.category_name}"
+                             onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjhmOWZhIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkltYWdlPC90ZXh0Pjwvc3ZnPg=='">
+                        <div class="result-info">
+                            <div class="result-category">${result.category_name || 'Unknown'}</div>
+                            <div class="result-score">${scoreText}</div>
+                            <div class="result-meta">ID: ${result.image_id}</div>
+                        </div>
+                    `;
+                    
+                    resultsGrid.appendChild(resultItem);
+                });
+                
+                showSuccess(`Found ${results.results.length} similar images!`);
+            } else {
+                resultsGrid.innerHTML = '<p style="text-align: center; color: #666; grid-column: 1/-1;">No results found. Try a different image or adjust search parameters.</p>';
+            }
+        }
+
+        function showImageModal(result) {
+            const modal = document.getElementById('imageModal');
+            const modalImage = document.getElementById('modalImage');
+            const modalInfo = document.getElementById('modalInfo');
+            
+            modalImage.src = `${API_BASE}/images/${result.image_id}`;
+            modalInfo.innerHTML = `
+                <h3>${result.category_name || 'Unknown Category'}</h3>
+                <p><strong>Image ID:</strong> ${result.image_id}</p>
+                ${result.similarity_score !== null ? `<p><strong>Similarity:</strong> ${(result.similarity_score * 100).toFixed(2)}%</p>` : ''}
+                <p><strong>Metadata:</strong> ${JSON.stringify(result.metadata || {}, null, 2)}</p>
+            `;
+            
+            modal.style.display = 'block';
+        }
+
+        function closeImageModal() {
+            document.getElementById('imageModal').style.display = 'none';
+        }
+
+        function showLoading(show) {
+            const loadingPanel = document.getElementById('loadingPanel');
+            loadingPanel.style.display = show ? 'block' : 'none';
+            
+            if (show) {
+                document.getElementById('resultsPanel').style.display = 'none';
+            }
+        }
+
+        function showError(message) {
+            const errorPanel = document.getElementById('errorPanel');
+            errorPanel.textContent = message;
+            errorPanel.style.display = 'block';
+            
+            setTimeout(() => {
+                errorPanel.style.display = 'none';
+            }, 5000);
+        }
+
+        function showSuccess(message) {
+            const successPanel = document.getElementById('successPanel');
+            successPanel.textContent = message;
+            successPanel.style.display = 'block';
+            
+            setTimeout(() => {
+                successPanel.style.display = 'none';
+            }, 3000);
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        function logout() {
+            localStorage.clear();
+            window.location.href = 'login.html';
+        }
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('imageModal');
+            if (event.target === modal) {
+                closeImageModal();
+            }
+        }
+    </script>
+</body>
+</html>

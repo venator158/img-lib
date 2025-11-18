@@ -5,38 +5,44 @@
 -- Make sure pgcrypto is enabled (for hashing binary image data)
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
--- Add image_hash column if missing
+-- Add a unique image_hash column if missing
 ALTER TABLE images
 ADD COLUMN IF NOT EXISTS image_hash TEXT UNIQUE;
 
--- Trigger function: compute hash and prevent duplicates
-CREATE OR REPLACE FUNCTION compute_hash_and_prevent_duplicate()
+-- Automatically compute hash before insert/update if missing
+CREATE OR REPLACE FUNCTION set_image_hash()
 RETURNS TRIGGER AS $$
 BEGIN
-    -- Compute SHA256 hash if not already set
     IF NEW.image_hash IS NULL THEN
+        -- Compute SHA256 hash of image binary data
         NEW.image_hash := encode(digest(NEW.image_data, 'sha256'), 'hex');
     END IF;
-
-    -- Check if the hash already exists in the table
-    IF EXISTS (SELECT 1 FROM images WHERE image_hash = NEW.image_hash) THEN
-        RAISE EXCEPTION 'Duplicate image detected (hash: %)', NEW.image_hash;
-    END IF;
-
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
--- Drop old triggers (if any)
 DROP TRIGGER IF EXISTS trg_set_image_hash ON images;
-DROP TRIGGER IF EXISTS trg_prevent_duplicate_images ON images;
-
--- Create single combined trigger
-CREATE TRIGGER trg_compute_hash_and_prevent_duplicate
+CREATE TRIGGER trg_set_image_hash
 BEFORE INSERT OR UPDATE ON images
 FOR EACH ROW
-EXECUTE FUNCTION compute_hash_and_prevent_duplicate();
+EXECUTE FUNCTION set_image_hash();
 
+-- Prevent insertion of duplicate images
+CREATE OR REPLACE FUNCTION prevent_duplicate_images()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM images WHERE image_hash = NEW.image_hash) THEN
+        RAISE EXCEPTION 'Duplicate image detected (hash: %)', NEW.image_hash;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_prevent_duplicate_images ON images;
+CREATE TRIGGER trg_prevent_duplicate_images
+BEFORE INSERT ON images
+FOR EACH ROW
+EXECUTE FUNCTION prevent_duplicate_images();
 
 
 -- Queue table to mark categories that need prototype recomputation
@@ -121,6 +127,7 @@ FOR EACH ROW EXECUTE FUNCTION queue_vector_deletion();
 
 
 --maintain denormalized image count per category
+-- Uncomment and use if you want a fast image_count column on categories.
 ALTER TABLE categories ADD COLUMN IF NOT EXISTS image_count INT DEFAULT 0;
 
 CREATE OR REPLACE FUNCTION update_category_image_count() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -136,35 +143,5 @@ BEGIN
 
  DROP TRIGGER IF EXISTS trg_images_update_count ON images;
  CREATE TRIGGER trg_images_update_count AFTER INSERT OR DELETE ON images FOR EACH ROW EXECUTE FUNCTION update_category_image_count();
-
-CREATE OR REPLACE PROCEDURE delete_image_vectors(p_image_id INT)
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    v_vector_id INT;
-BEGIN
-    -- Queue each vector for deletion
-    FOR v_vector_id IN 
-        SELECT vector_id FROM vectors WHERE image_id = p_image_id
-    LOOP
-        INSERT INTO vector_deletion_queue (image_id, queued_at)
-        VALUES (p_image_id, NOW());
-
-        DELETE FROM vectors WHERE vector_id = v_vector_id;
-    END LOOP;
-
-    -- Queue category for prototype recompute
-    INSERT INTO prototype_recompute_queue (category_id, last_updated)
-    SELECT category_id, NOW() 
-    FROM images 
-    WHERE image_id = p_image_id
-    ON CONFLICT (category_id) 
-    DO UPDATE SET last_updated = EXCLUDED.last_updated;
-
-    -- Delete the image itself
-    DELETE FROM images WHERE image_id = p_image_id;
-END;
-$$;
-
 
 -- End of triggers.sql

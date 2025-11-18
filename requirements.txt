@@ -8,14 +8,14 @@ psycopg2-binary==2.9.9
 psycopg2==2.9.9
 
 # Machine Learning & Computer Vision
+faiss-cpu==1.7.4
 torch==2.1.0
 torchvision==0.16.0
 numpy==1.24.3
 pillow==10.0.1
-faiss-cpu==1.7.4
 
 # Data processing
-tensorflow==2.13.0
+tensorflow==2.14.1
 
 # API & Web
 pydantic==2.4.2

@@ -5,7 +5,7 @@ Provides REST API endpoints for image upload, similarity search, and prototype-b
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -20,6 +20,10 @@ import time
 from pathlib import Path
 from dotenv import load_dotenv
 import asyncio
+import hashlib
+import secrets
+from datetime import datetime, timedelta
+import psycopg2.extras
 
 def log_sql_event(query_type: str, operation: str, **kwargs):
     """Log structured JSON event for SQL operations"""
@@ -110,6 +114,11 @@ class SystemStatus(BaseModel):
     total_vectors: int
     categories_with_prototypes: int
     index_info: Optional[Dict[str, Any]]
+    # Dashboard-specific fields
+    users: int
+    images: int
+    categories: int
+    active_sessions: int
 
 
 # Startup and shutdown events
@@ -212,12 +221,6 @@ def format_image_info(image_data: Dict[str, Any], similarity_score: Optional[flo
 
 # API Endpoints
 
-@app.get("/")
-async def root():
-    """Root endpoint - redirect to frontend."""
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse(url="/app")
-
 
 @app.get("/status", response_model=SystemStatus)
 async def get_system_status():
@@ -227,6 +230,20 @@ async def get_system_status():
         all_images = db_service.image_manager.get_all_images()
         all_vectors = db_service.vector_manager.get_all_vectors()
         all_prototypes = db_service.prototype_manager.get_all_prototypes()
+        all_categories = db_service.category_manager.get_all_categories()
+        
+        # Get user count and active sessions
+        user_count = 0
+        active_sessions = 0
+        try:
+            with db_service.db_manager.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT COUNT(*) FROM users")
+                    user_count = cur.fetchone()[0]
+                    cur.execute("SELECT COUNT(*) FROM user_sessions WHERE created_at > NOW() - INTERVAL '24 hours'")
+                    active_sessions = cur.fetchone()[0]
+        except Exception as e:
+            logger.warning(f"Could not get user stats: {e}")
         
         # Check FAISS index
         faiss_loaded = vector_engine and vector_engine.faiss_manager.index is not None
@@ -250,7 +267,12 @@ async def get_system_status():
             total_images=len(all_images),
             total_vectors=len(all_vectors),
             categories_with_prototypes=len(all_prototypes),
-            index_info=index_info
+            index_info=index_info,
+            # Dashboard fields
+            users=user_count,
+            images=len(all_images),
+            categories=len(all_categories),
+            active_sessions=active_sessions
         )
         
     except Exception as e:
@@ -262,7 +284,11 @@ async def get_system_status():
             total_images=0,
             total_vectors=0,
             categories_with_prototypes=0,
-            index_info=None
+            index_info=None,
+            users=0,
+            images=0,
+            categories=0,
+            active_sessions=0
         )
 
 
@@ -329,7 +355,7 @@ async def upload_image(
         raise HTTPException(status_code=500, detail=f"Error processing upload: {str(e)}")
 
 
-@app.post("/search", response_model=SearchResult)
+@app.post("/search")
 async def search_similar_images(
     file: UploadFile = File(...),
     limit: int = Query(10, ge=1, le=50, description="Number of similar images to return"),
@@ -388,33 +414,51 @@ async def search_similar_images(
                 scores = [score for _, score in results]
                 logger.info(f"Similarity scores - Min: {min(scores):.4f}, Max: {max(scores):.4f}, Avg: {np.mean(scores):.4f}")
         
-        # Get detailed image information
+        # Get detailed image information with category names
         similar_images = []
         for image_id, similarity_score in results:
-            image_info = db_service.image_manager.get_image_by_id(image_id)
-            if image_info:
-                similar_images.append(format_image_info(image_info, similarity_score))
+            # Get image info with category name from database
+            with db_service.db_manager.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute("""
+                        SELECT i.image_id, i.category_id, i.metadata, c.category_name 
+                        FROM images i 
+                        JOIN categories c ON i.category_id = c.category_id 
+                        WHERE i.image_id = %s
+                    """, (image_id,))
+                    image_info = cur.fetchone()
+                    
+                    if image_info:
+                        similar_images.append({
+                            "image_id": image_info["image_id"],
+                            "category_id": image_info["category_id"],
+                            "category_name": image_info["category_name"],
+                            "similarity_score": similarity_score,
+                            "metadata": image_info["metadata"]
+                        })
         
         search_time = time.time() - start_time
         
-        return SearchResult(
-            query_info={
+        # Return format expected by frontend
+        return {
+            "query_info": {
                 "filename": file.filename,
                 "content_type": file.content_type,
-                "embedding_dimension": len(query_embedding)
+                "embedding_dimension": len(query_embedding),
+                "method": "prototype" if use_prototypes else "similarity"
             },
-            similar_images=similar_images,
-            search_time=search_time,
-            used_prototype_filtering=use_prototypes and prototype_categories is not None,
-            prototype_categories=prototype_categories
-        )
+            "results": similar_images,
+            "search_time": search_time,
+            "used_prototype_filtering": use_prototypes and prototype_categories is not None,
+            "prototype_categories": prototype_categories
+        }
         
     except Exception as e:
         logger.error(f"Error in similarity search: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing search: {str(e)}")
 
 
-@app.post("/search/prototypes", response_model=PrototypeSearchResult)
+@app.post("/search-prototypes")
 async def search_prototypes(file: UploadFile = File(...)):
     """Search for similar category prototypes."""
     validate_image(file)
@@ -460,16 +504,66 @@ async def search_prototypes(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Error processing prototype search: {str(e)}")
 
 
+@app.get("/images")
+async def get_images_list(
+    limit: int = Query(10, ge=1, le=100),
+    category_id: Optional[int] = Query(None)
+):
+    """Get list of images with optional filtering."""
+    try:
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                if category_id:
+                    log_sql_event("SELECT", "images_by_category", category_id=category_id, limit=limit)
+                    cur.execute("""
+                        SELECT i.image_id, i.category_id, c.category_name
+                        FROM images i 
+                        JOIN categories c ON i.category_id = c.category_id
+                        WHERE i.category_id = %s 
+                        ORDER BY i.image_id
+                        LIMIT %s
+                    """, (category_id, limit))
+                else:
+                    log_sql_event("SELECT", "images_list", limit=limit)
+                    cur.execute("""
+                        SELECT i.image_id, i.category_id, c.category_name
+                        FROM images i 
+                        JOIN categories c ON i.category_id = c.category_id
+                        ORDER BY i.image_id
+                        LIMIT %s
+                    """, (limit,))
+                
+                images = cur.fetchall()
+                return {"images": [dict(img) for img in images]}
+                
+    except Exception as e:
+        logger.error(f"Error getting images list: {e}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving images: {str(e)}")
+
+
+@app.get("/images/{image_id}/thumbnail")
+async def get_image_thumbnail(image_id: int):
+    """Get image thumbnail by ID."""
+    return await get_image(image_id)  # For now, return full image as thumbnail
+
+
 @app.get("/images/{image_id}")
 async def get_image(image_id: int):
     """Get image by ID and return as image response."""
     try:
-        image_data = db_service.image_manager.get_image_by_id(image_id)
-        if not image_data:
-            raise HTTPException(status_code=404, detail="Image not found")
+        # Get image data from database
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT image_data FROM images WHERE image_id = %s", (image_id,))
+                result = cur.fetchone()
+                
+                if not result:
+                    raise HTTPException(status_code=404, detail="Image not found")
+                
+                image_data = result[0]
         
         return StreamingResponse(
-            io.BytesIO(image_data["image_data"]),
+            io.BytesIO(image_data),
             media_type="image/png",
             headers={"Cache-Control": "max-age=3600"}
         )
@@ -500,9 +594,20 @@ async def get_image_info(image_id: int):
 
 @app.get("/categories")
 async def get_categories():
-    """Get all categories."""
+    """Get all categories with image counts."""
     try:
-        categories = db_service.category_manager.get_all_categories()
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                log_sql_event("SELECT", "categories_with_counts")
+                cur.execute("""
+                    SELECT c.category_id, c.category_name, COUNT(i.image_id) as image_count
+                    FROM categories c
+                    LEFT JOIN images i ON c.category_id = i.category_id
+                    GROUP BY c.category_id, c.category_name
+                    ORDER BY c.category_name
+                """)
+                categories = [dict(row) for row in cur.fetchall()]
+                
         return {"categories": categories}
         
     except Exception as e:
@@ -703,22 +808,733 @@ async def admin_process_queues(process_prototypes: bool = True, process_deletion
         raise HTTPException(status_code=500, detail="Error processing queues")
 
 
+# Authentication and User Management Functions
+async def hash_password(password: str) -> str:
+    """Hash password using bcrypt-like method (simplified for demo)"""
+    return hashlib.sha256(f"{password}salt".encode()).hexdigest()
+
+async def verify_password(password: str, hashed: str) -> bool:
+    """Verify password against hash"""
+    return await hash_password(password) == hashed
+
+async def create_session(user_id: int) -> str:
+    """Create user session"""
+    session_id = secrets.token_urlsafe(32)
+    with db_service.db_manager.get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO user_sessions (session_id, user_id) VALUES (%s, %s)",
+                (session_id, user_id)
+            )
+            conn.commit()
+    return session_id
+
+# Authentication Endpoints
+@app.post("/auth/login")
+async def login(request: dict):
+    """Authenticate user and create session"""
+    try:
+        username = request.get('username')
+        password = request.get('password')
+        
+        if not username or not password:
+            raise HTTPException(status_code=400, detail="Username and password required")
+        
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                # Get user
+                log_sql_event("SELECT", "user_authentication", username=username)
+                cur.execute(
+                    "SELECT user_id, username, password_hash, role, is_active FROM users WHERE username = %s",
+                    (username,)
+                )
+                user = cur.fetchone()
+                
+                if not user or not user['is_active']:
+                    raise HTTPException(status_code=401, detail="Invalid credentials")
+                
+                # Verify password (simplified for demo)
+                expected_hash = await hash_password(password)
+                if user['password_hash'] != expected_hash:
+                    raise HTTPException(status_code=401, detail="Invalid credentials")
+                
+                # Create session
+                session_id = await create_session(user['user_id'])
+                
+                return {
+                    "session_id": session_id,
+                    "username": user['username'],
+                    "role": user['role'],
+                    "message": "Login successful"
+                }
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Login error: {e}")
+        raise HTTPException(status_code=500, detail="Login failed")
+
+@app.post("/auth/logout")
+async def logout(session_id: str):
+    """Logout user and invalidate session"""
+    try:
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor() as cur:
+                log_sql_event("DELETE", "user_logout", session_id=session_id)
+                cur.execute("DELETE FROM user_sessions WHERE session_id = %s", (session_id,))
+                conn.commit()
+                
+        return {"message": "Logout successful"}
+    except Exception as e:
+        logger.error(f"Logout error: {e}")
+        raise HTTPException(status_code=500, detail="Logout failed")
+
+# Admin API Endpoints
+@app.get("/admin/users")
+async def get_all_users():
+    """Get all users for admin management"""
+    try:
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                log_sql_event("SELECT", "admin_get_users")
+                cur.execute("""
+                    SELECT user_id, username, email, role, created_at, last_login, is_active
+                    FROM users ORDER BY created_at DESC
+                """)
+                users = cur.fetchall()
+                return [dict(user) for user in users]
+    except Exception as e:
+        logger.error(f"Error fetching users: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching users")
+
+@app.post("/admin/users")
+async def create_user(request: dict):
+    """Create new user with role"""
+    try:
+        password_hash = await hash_password(request['password'])
+        
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor() as cur:
+                log_sql_event("INSERT", "admin_create_user", username=request['username'])
+                cur.execute(
+                    "SELECT create_user_with_role(%s, %s, %s, %s)",
+                    (request['username'], request['email'], password_hash, request['role'])
+                )
+                user_id = cur.fetchone()[0]
+                conn.commit()
+                return {"message": "User created successfully", "user_id": user_id}
+    except Exception as e:
+        logger.error(f"Error creating user: {e}")
+        raise HTTPException(status_code=500, detail=f"Error creating user: {str(e)}")
+
+@app.post("/admin/privileges")
+async def manage_user_privileges(request: dict):
+    """Grant or revoke user privileges"""
+    try:
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor() as cur:
+                if request['action'] == 'grant':
+                    log_sql_event("INSERT", "admin_grant_privilege", user_id=request['user_id'])
+                    cur.execute(
+                        "INSERT INTO user_privileges (user_id, resource, permission) VALUES (%s, %s, %s)",
+                        (request['user_id'], request['resource'], request['permission'])
+                    )
+                elif request['action'] == 'revoke':
+                    log_sql_event("DELETE", "admin_revoke_privilege", user_id=request['user_id'])
+                    cur.execute(
+                        "DELETE FROM user_privileges WHERE user_id = %s AND resource = %s AND permission = %s",
+                        (request['user_id'], request['resource'], request['permission'])
+                    )
+                conn.commit()
+                return {"message": f"Privilege {request['action']}ed successfully"}
+    except Exception as e:
+        logger.error(f"Error managing privileges: {e}")
+        raise HTTPException(status_code=500, detail=f"Error managing privileges: {str(e)}")
+
+@app.post("/admin/categories")
+async def create_category_admin(request: dict):
+    """Create new category via admin panel"""
+    try:
+        category_name = request.get('category_name', '').strip()
+        if not category_name:
+            raise HTTPException(status_code=400, detail="Category name is required")
+        
+        # Check if category already exists
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT category_id FROM categories WHERE category_name = %s", (category_name,))
+                if cur.fetchone():
+                    raise HTTPException(status_code=400, detail="Category already exists")
+                
+                # Create new category
+                cur.execute("INSERT INTO categories (category_name) VALUES (%s) RETURNING category_id", (category_name,))
+                category_id = cur.fetchone()[0]
+                conn.commit()
+                
+        return {"message": "Category created successfully", "category_id": category_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating category: {e}")
+        raise HTTPException(status_code=500, detail=f"Error creating category: {str(e)}")
+
+@app.put("/admin/images/{image_id}")
+async def update_image_admin(image_id: int, request: dict):
+    """Update image metadata and category"""
+    try:
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor() as cur:
+                updates = []
+                params = []
+                
+                if 'category_id' in request:
+                    updates.append("category_id = %s")
+                    params.append(request['category_id'])
+                
+                if 'metadata' in request:
+                    updates.append("metadata = %s")
+                    params.append(json.dumps(request['metadata']))
+                
+                if updates:
+                    params.append(image_id)
+                    query = f"UPDATE images SET {', '.join(updates)} WHERE image_id = %s"
+                    log_sql_event("UPDATE", "admin_update_image", image_id=image_id)
+                    cur.execute(query, params)
+                    conn.commit()
+                    
+                return {"message": "Image updated successfully"}
+    except Exception as e:
+        logger.error(f"Error updating image: {e}")
+        raise HTTPException(status_code=500, detail=f"Error updating image: {str(e)}")
+
+@app.delete("/admin/images/{image_id}")
+async def delete_image_admin(image_id: int):
+    """Delete image and its vectors"""
+    try:
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor() as cur:
+                # Check if image exists first
+                cur.execute("SELECT image_id FROM images WHERE image_id = %s", (image_id,))
+                if not cur.fetchone():
+                    raise HTTPException(status_code=404, detail="Image not found")
+                
+                # Delete vector first (will trigger cleanup)
+                log_sql_event("DELETE", "admin_delete_vector", image_id=image_id)
+                cur.execute("DELETE FROM vectors WHERE image_id = %s", (image_id,))
+                
+                # Delete image
+                log_sql_event("DELETE", "admin_delete_image", image_id=image_id)
+                cur.execute("DELETE FROM images WHERE image_id = %s", (image_id,))
+                conn.commit()
+                
+        return {"message": "Image deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting image: {e}")
+        raise HTTPException(status_code=500, detail=f"Error deleting image: {str(e)}")
+
+@app.delete("/admin/categories/{category_id}")
+async def delete_category_admin(category_id: int):
+    """Delete category and all its images"""
+    try:
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor() as cur:
+                # Check if category exists first
+                cur.execute("SELECT category_id FROM categories WHERE category_id = %s", (category_id,))
+                if not cur.fetchone():
+                    raise HTTPException(status_code=404, detail="Category not found")
+                
+                # Delete associated vectors first
+                log_sql_event("DELETE", "admin_delete_category_vectors", category_id=category_id)
+                cur.execute("DELETE FROM vectors WHERE image_id IN (SELECT image_id FROM images WHERE category_id = %s)", (category_id,))
+                
+                # Delete associated images
+                log_sql_event("DELETE", "admin_delete_category_images", category_id=category_id)
+                cur.execute("DELETE FROM images WHERE category_id = %s", (category_id,))
+                
+                # Delete category
+                log_sql_event("DELETE", "admin_delete_category", category_id=category_id)
+                cur.execute("DELETE FROM categories WHERE category_id = %s", (category_id,))
+                conn.commit()
+                
+        return {"message": "Category and all associated images deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting category: {e}")
+        raise HTTPException(status_code=500, detail=f"Error deleting category: {str(e)}")
+
+@app.post("/admin/batch-process")
+async def batch_process_images(request: dict):
+    """Execute batch operations on images"""
+    try:
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                log_sql_event("SELECT", "admin_batch_process", category_id=request['category_id'])
+                cur.execute(
+                    "SELECT * FROM batch_process_category(%s, %s, %s)",
+                    (request['category_id'], request['operation'], request.get('batch_size', 100))
+                )
+                results = cur.fetchall()
+                conn.commit()
+                
+        return {"results": [dict(row) for row in results]}
+    except Exception as e:
+        logger.error(f"Error in batch processing: {e}")
+        raise HTTPException(status_code=500, detail=f"Error in batch processing: {str(e)}")
+
+# Advanced Query Endpoints
+@app.post("/admin/queries/nested")
+async def execute_nested_query(request: dict):
+    """Execute nested query examples"""
+    try:
+        query_type = request['query_type']
+        
+        queries = {
+            'top_categories': """
+                SELECT i.*, c.category_name FROM images i
+                JOIN categories c ON i.category_id = c.category_id
+                WHERE i.category_id IN (
+                    SELECT category_id FROM (
+                        SELECT category_id, COUNT(*) as cnt 
+                        FROM images GROUP BY category_id 
+                        ORDER BY cnt DESC LIMIT 3
+                    ) top_cats
+                )
+                ORDER BY i.category_id, i.image_id
+            """,
+            'above_avg_size': """
+                SELECT i.image_id, i.category_id, LENGTH(i.image_data) as size_bytes
+                FROM images i
+                WHERE LENGTH(i.image_data) > (
+                    SELECT AVG(LENGTH(image_data)) FROM images
+                )
+                ORDER BY size_bytes DESC
+            """,
+            'categories_with_prototypes': """
+                SELECT c.*, 
+                    (SELECT COUNT(*) FROM images WHERE category_id = c.category_id) as image_count
+                FROM categories c
+                WHERE c.category_id IN (
+                    SELECT category_id FROM _category_prototypes
+                )
+                ORDER BY c.category_name
+            """
+        }
+        
+        if query_type not in queries:
+            raise HTTPException(status_code=400, detail="Invalid query type")
+            
+        query = queries[query_type]
+        
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                start_time = time.time()
+                log_sql_event("SELECT", "admin_nested_query", query_name=query_type)
+                cur.execute(query)
+                results = cur.fetchall()
+                execution_time = (time.time() - start_time) * 1000
+                
+        return {
+            "query_type": query_type,
+            "query": query.strip(),
+            "execution_time": round(execution_time, 2),
+            "data": [dict(row) for row in results]
+        }
+    except Exception as e:
+        logger.error(f"Error executing nested query: {e}")
+        raise HTTPException(status_code=500, detail=f"Error executing nested query: {str(e)}")
+
+@app.post("/admin/queries/join")
+async def execute_join_query(request: dict):
+    """Execute join query examples"""
+    try:
+        query_type = request['query_type']
+        
+        queries = {
+            'image_category_vector': """
+                SELECT i.image_id, i.metadata, c.category_name, 
+                       v.vector_id, 
+                       CASE WHEN v.vector_id IS NOT NULL THEN 'Yes' ELSE 'No' END as has_vector
+                FROM images i
+                LEFT JOIN categories c ON i.category_id = c.category_id
+                LEFT JOIN vectors v ON i.image_id = v.image_id
+                ORDER BY i.image_id
+                LIMIT 50
+            """,
+            'category_statistics': """
+                SELECT c.category_name, 
+                       COUNT(i.image_id) as image_count,
+                       COUNT(v.vector_id) as vector_count,
+                       AVG(LENGTH(i.image_data))::INT as avg_size_bytes,
+                       CASE WHEN p.prototype_id IS NOT NULL THEN 'Yes' ELSE 'No' END as has_prototype
+                FROM categories c
+                LEFT JOIN images i ON c.category_id = i.category_id
+                LEFT JOIN vectors v ON i.image_id = v.image_id
+                LEFT JOIN _category_prototypes p ON c.category_id = p.category_id
+                GROUP BY c.category_id, c.category_name, p.prototype_id
+                ORDER BY image_count DESC
+            """,
+            'user_activity_summary': """
+                SELECT u.username, u.role,
+                       COUNT(DISTINCT s.session_id) as session_count,
+                       COUNT(l.log_id) as activity_count,
+                       MAX(s.created_at) as last_login
+                FROM users u
+                LEFT JOIN user_sessions s ON u.user_id = s.user_id
+                LEFT JOIN user_activity_log l ON u.user_id = l.user_id
+                WHERE u.is_active = true
+                GROUP BY u.user_id, u.username, u.role
+                ORDER BY activity_count DESC
+            """
+        }
+        
+        if query_type not in queries:
+            raise HTTPException(status_code=400, detail="Invalid query type")
+            
+        query = queries[query_type]
+        
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                start_time = time.time()
+                log_sql_event("SELECT", "admin_join_query", query_name=query_type)
+                cur.execute(query)
+                results = cur.fetchall()
+                execution_time = (time.time() - start_time) * 1000
+                
+        return {
+            "query_type": query_type,
+            "query": query.strip(),
+            "execution_time": round(execution_time, 2),
+            "data": [dict(row) for row in results]
+        }
+    except Exception as e:
+        logger.error(f"Error executing join query: {e}")
+        raise HTTPException(status_code=500, detail=f"Error executing join query: {str(e)}")
+
+@app.post("/admin/queries/aggregate")
+async def execute_aggregate_query(request: dict):
+    """Execute aggregate query examples"""
+    try:
+        query_type = request['query_type']
+        
+        queries = {
+            'category_summary': """
+                SELECT c.category_name,
+                       COUNT(i.image_id) as total_images,
+                       MIN(LENGTH(i.image_data)) as min_size_bytes,
+                       MAX(LENGTH(i.image_data)) as max_size_bytes,
+                       AVG(LENGTH(i.image_data))::INT as avg_size_bytes,
+                       SUM(LENGTH(i.image_data)) as total_size_bytes
+                FROM categories c
+                LEFT JOIN images i ON c.category_id = i.category_id
+                GROUP BY c.category_id, c.category_name
+                HAVING COUNT(i.image_id) > 0
+                ORDER BY total_images DESC
+            """,
+            'size_statistics': """
+                SELECT 
+                    COUNT(*) as total_images,
+                    MIN(LENGTH(image_data)) as smallest_bytes,
+                    MAX(LENGTH(image_data)) as largest_bytes,
+                    AVG(LENGTH(image_data))::INT as average_bytes,
+                    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY LENGTH(image_data))::INT as median_bytes,
+                    SUM(LENGTH(image_data)) as total_storage_bytes
+                FROM images
+            """,
+            'user_stats': """
+                SELECT 
+                    u.role,
+                    COUNT(*) as user_count,
+                    COUNT(CASE WHEN u.is_active THEN 1 END) as active_users,
+                    AVG(EXTRACT(EPOCH FROM (now() - u.created_at))/86400)::INT as avg_days_since_creation,
+                    COUNT(DISTINCT s.session_id) as total_sessions
+                FROM users u
+                LEFT JOIN user_sessions s ON u.user_id = s.user_id
+                GROUP BY u.role
+                ORDER BY user_count DESC
+            """
+        }
+        
+        if query_type not in queries:
+            raise HTTPException(status_code=400, detail="Invalid query type")
+            
+        query = queries[query_type]
+        
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                start_time = time.time()
+                log_sql_event("SELECT", "admin_aggregate_query", query_name=query_type)
+                cur.execute(query)
+                results = cur.fetchall()
+                execution_time = (time.time() - start_time) * 1000
+                
+        return {
+            "query_type": query_type,
+            "query": query.strip(),
+            "execution_time": round(execution_time, 2),
+            "data": [dict(row) for row in results]
+        }
+    except Exception as e:
+        logger.error(f"Error executing aggregate query: {e}")
+        raise HTTPException(status_code=500, detail=f"Error executing aggregate query: {str(e)}")
+
+@app.post("/admin/queries/custom")
+async def execute_custom_query(request: dict):
+    """Execute custom SQL query (SELECT only)"""
+    try:
+        query = request['query'].strip()
+        
+        # Security check - only allow SELECT statements
+        if not query.upper().startswith('SELECT'):
+            raise HTTPException(status_code=400, detail="Only SELECT statements are allowed")
+            
+        # Additional security checks
+        dangerous_keywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'CREATE', 'TRUNCATE']
+        query_upper = query.upper()
+        for keyword in dangerous_keywords:
+            if keyword in query_upper:
+                raise HTTPException(status_code=400, detail=f"Keyword '{keyword}' is not allowed")
+        
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                start_time = time.time()
+                log_sql_event("SELECT", "admin_custom_query", query=query[:100])
+                cur.execute(query)
+                results = cur.fetchall()
+                execution_time = (time.time() - start_time) * 1000
+                
+        return {
+            "query": query,
+            "execution_time": round(execution_time, 2),
+            "data": [dict(row) for row in results]
+        }
+    except Exception as e:
+        logger.error(f"Error executing custom query: {e}")
+        raise HTTPException(status_code=500, detail=f"Error executing custom query: {str(e)}")
+
+# Stored Procedures Endpoints
+@app.post("/admin/procedures/execute")
+async def execute_stored_procedure(request: dict):
+    """Execute stored procedures and functions"""
+    try:
+        procedure_name = request['procedure_name']
+        parameters = request.get('parameters', {})
+        
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                start_time = time.time()
+                log_sql_event("FUNCTION", "admin_execute_procedure", procedure=procedure_name)
+                
+                if procedure_name == 'get_category_statistics':
+                    cur.execute("SELECT * FROM get_category_statistics()")
+                elif procedure_name == 'get_database_health':
+                    cur.execute("SELECT * FROM get_database_health()")
+                elif procedure_name == 'cleanup_old_data':
+                    days = parameters.get('days_old', 30)
+                    cur.execute("SELECT * FROM cleanup_old_data(%s)", (days,))
+                elif procedure_name == 'rebuild_database_indexes':
+                    cur.execute("SELECT * FROM rebuild_database_indexes()")
+                elif procedure_name == 'analyze_similarity_patterns':
+                    category_id = parameters.get('category_id')
+                    if category_id:
+                        cur.execute("SELECT * FROM analyze_similarity_patterns(%s)", (category_id,))
+                    else:
+                        cur.execute("SELECT * FROM analyze_similarity_patterns()")
+                elif procedure_name == 'generate_backup_metadata':
+                    cur.execute("SELECT * FROM generate_backup_metadata()")
+                else:
+                    raise HTTPException(status_code=400, detail="Unknown procedure")
+                    
+                results = cur.fetchall()
+                execution_time = (time.time() - start_time) * 1000
+                conn.commit()
+                
+        return {
+            "procedure_name": procedure_name,
+            "execution_time": round(execution_time, 2),
+            "data": [dict(row) for row in results]
+        }
+    except Exception as e:
+        logger.error(f"Error executing procedure: {e}")
+        raise HTTPException(status_code=500, detail=f"Error executing procedure: {str(e)}")
+
+# Trigger Management Endpoints
+@app.get("/admin/triggers")
+async def get_database_triggers():
+    """Get all database triggers"""
+    try:
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                log_sql_event("SELECT", "admin_get_triggers")
+                cur.execute("""
+                    SELECT trigger_name, event_object_table as table_name, 
+                           event_manipulation, action_statement
+                    FROM information_schema.triggers 
+                    WHERE trigger_schema = 'public'
+                    ORDER BY trigger_name
+                """)
+                triggers = cur.fetchall()
+                
+        return {"triggers": [dict(trigger) for trigger in triggers]}
+    except Exception as e:
+        logger.error(f"Error fetching triggers: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching triggers")
+
+@app.get("/admin/health")
+async def get_database_health_admin():
+    """Get database health metrics"""
+    try:
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                log_sql_event("SELECT", "admin_health_check")
+                cur.execute("SELECT * FROM get_database_health()")
+                health_metrics = cur.fetchall()
+                
+        return {"health_metrics": [dict(metric) for metric in health_metrics]}
+    except Exception as e:
+        logger.error(f"Error getting health metrics: {e}")
+        raise HTTPException(status_code=500, detail="Error getting health metrics")
+
+@app.post("/admin/cleanup")
+async def cleanup_database():
+    """Cleanup old sessions and temporary data"""
+    try:
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                log_sql_event("FUNCTION", "admin_cleanup")
+                cur.execute("SELECT * FROM cleanup_old_data(30)")
+                result = cur.fetchone()
+                conn.commit()
+                
+        return dict(result)
+    except Exception as e:
+        logger.error(f"Error in cleanup: {e}")
+        raise HTTPException(status_code=500, detail="Error in cleanup")
+
+@app.get("/admin/reports/full")
+async def generate_full_report():
+    """Generate comprehensive system report"""
+    try:
+        # Gather various metrics
+        status = await get_system_status()
+        
+        with db_service.db_manager.get_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                # Category statistics
+                cur.execute("SELECT * FROM get_category_statistics()")
+                category_stats = cur.fetchall()
+                
+                # Health metrics
+                cur.execute("SELECT * FROM get_database_health()")
+                health_metrics = cur.fetchall()
+                
+                # User statistics
+                cur.execute("""
+                    SELECT role, COUNT(*) as count,
+                           COUNT(CASE WHEN is_active THEN 1 END) as active_count
+                    FROM users GROUP BY role
+                """)
+                user_stats = cur.fetchall()
+                
+        return {
+            "generated_at": datetime.now().isoformat(),
+            "sections": {
+                "system_status": status.__dict__,
+                "category_statistics": [dict(row) for row in category_stats],
+                "health_metrics": [dict(row) for row in health_metrics],
+                "user_statistics": [dict(row) for row in user_stats]
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error generating report: {e}")
+        raise HTTPException(status_code=500, detail="Error generating report")
+
 # Mount static files (for frontend)
 static_path = Path(__file__).parent.parent / "frontend"
-if static_path.exists():
-    app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
-    
-    @app.get("/app")
-    async def serve_frontend():
-        """Serve the frontend application."""
-        index_path = static_path / "index.html"
-        if index_path.exists():
-            with open(index_path, 'r', encoding='utf-8') as f:
+app.mount("/static", StaticFiles(directory=static_path), name="static")
+
+# Root route - serve login page
+@app.get("/")
+async def root():
+    """Serve the login page"""
+    try:
+        login_path = static_path / "login.html"
+        if login_path.exists():
+            with open(login_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-            from fastapi.responses import HTMLResponse
-            return HTMLResponse(content=content)
+                return HTMLResponse(content)
         else:
-            raise HTTPException(status_code=404, detail="Frontend not available")
+            return HTMLResponse(f"<h1>Login page not found at {login_path}</h1>", status_code=404)
+    except Exception as e:
+        return HTMLResponse(f"<h1>Error loading page: {e}</h1>", status_code=500)
+
+# Serve specific HTML files
+@app.get("/login")
+@app.get("/login.html")
+async def login_page():
+    """Serve the login page"""
+    return await root()
+
+@app.get("/admin-dashboard.html")
+async def admin_dashboard():
+    """Serve the simplified admin dashboard page"""
+    dashboard_path = static_path / "admin-simple.html"
+    if dashboard_path.exists():
+        with open(dashboard_path, 'r', encoding='utf-8') as f:
+            return HTMLResponse(f.read())
+    else:
+        return HTMLResponse("<h1>Admin dashboard not found</h1>", status_code=404)
+
+@app.get("/admin-simple.html")
+async def admin_simple():
+    """Serve the simplified admin panel page"""
+    dashboard_path = static_path / "admin-simple.html"
+    if dashboard_path.exists():
+        with open(dashboard_path, 'r', encoding='utf-8') as f:
+            return HTMLResponse(f.read())
+    else:
+        return HTMLResponse("<h1>Admin panel not found</h1>", status_code=404)
+
+@app.get("/user-browser.html")
+async def user_browser():
+    """Serve the user browser page"""
+    browser_path = static_path / "user-browser.html"
+    if browser_path.exists():
+        with open(browser_path, 'r', encoding='utf-8') as f:
+            return HTMLResponse(f.read())
+    else:
+        return HTMLResponse("<h1>User browser not found</h1>", status_code=404)
+
+# Serve JavaScript files
+@app.get("/admin-dashboard.js")
+async def admin_js():
+    """Serve the admin dashboard JavaScript"""
+    js_path = static_path / "admin-simple.js"
+    if js_path.exists():
+        return FileResponse(js_path, media_type="application/javascript")
+    else:
+        raise HTTPException(status_code=404, detail="JavaScript file not found")
+
+@app.get("/admin-simple.js")
+async def admin_simple_js():
+    """Serve the simplified admin JavaScript"""
+    js_path = static_path / "admin-simple.js"
+    if js_path.exists():
+        return FileResponse(js_path, media_type="application/javascript")
+    else:
+        raise HTTPException(status_code=404, detail="JavaScript file not found")
+
+@app.get("/app")
+async def serve_frontend():
+    """Redirect to login page for proper authentication flow"""
+    return HTMLResponse("""
+    <script>
+        window.location.href = '/';
+    </script>
+    <p>Redirecting to login...</p>
+    """)
 
 
 if __name__ == "__main__":

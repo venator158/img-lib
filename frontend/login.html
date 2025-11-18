@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Similarity Search - Login</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .login-container {
+            background: white;
+            padding: 2rem;
+            border-radius: 10px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 400px;
+            margin: 2rem;
+        }
+
+        .logo {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        .logo h1 {
+            color: #333;
+            margin-bottom: 0.5rem;
+            font-size: 1.8rem;
+        }
+
+        .logo p {
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: #333;
+            font-weight: 500;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 0.75rem;
+            border: 2px solid #e1e1e1;
+            border-radius: 5px;
+            font-size: 1rem;
+            transition: border-color 0.3s;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .login-btn {
+            width: 100%;
+            padding: 0.75rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        .login-btn:hover {
+            transform: translateY(-2px);
+        }
+
+        .login-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .error-message {
+            color: #e74c3c;
+            text-align: center;
+            margin-top: 1rem;
+            padding: 0.5rem;
+            border-radius: 5px;
+            background: #fdf2f2;
+            border: 1px solid #f5c6cb;
+            display: none;
+        }
+
+        .success-message {
+            color: #27ae60;
+            text-align: center;
+            margin-top: 1rem;
+            padding: 0.5rem;
+            border-radius: 5px;
+            background: #f2f9f2;
+            border: 1px solid #c3e6cb;
+            display: none;
+        }
+
+        .demo-users {
+            margin-top: 2rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid #e1e1e1;
+        }
+
+        .demo-users h3 {
+            color: #333;
+            font-size: 0.9rem;
+            margin-bottom: 1rem;
+            text-align: center;
+        }
+
+        .user-card {
+            background: #f8f9fa;
+            padding: 0.75rem;
+            border-radius: 5px;
+            margin-bottom: 0.5rem;
+            cursor: pointer;
+            transition: background 0.3s;
+            border-left: 4px solid transparent;
+        }
+
+        .user-card:hover {
+            background: #e9ecef;
+        }
+
+        .user-card.admin {
+            border-left-color: #dc3545;
+        }
+
+        .user-card.user {
+            border-left-color: #007bff;
+        }
+
+        .user-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .user-name {
+            font-weight: 500;
+            color: #333;
+        }
+
+        .user-role {
+            font-size: 0.8rem;
+            padding: 0.2rem 0.5rem;
+            border-radius: 3px;
+            color: white;
+        }
+
+        .user-role.admin {
+            background: #dc3545;
+        }
+
+        .user-role.user {
+            background: #007bff;
+        }
+
+        .loading-spinner {
+            display: none;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .footer {
+            text-align: center;
+            margin-top: 2rem;
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="logo">
+            <h1>🔍 Image Search</h1>
+            <p>Advanced Similarity Search Platform</p>
+        </div>
+
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" required>
+            </div>
+
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" required>
+            </div>
+
+            <button type="submit" class="login-btn" id="loginBtn">
+                <span id="loginText">Sign In</span>
+                <div class="loading-spinner" id="loadingSpinner"></div>
+            </button>
+
+            <div class="error-message" id="errorMessage"></div>
+            <div class="success-message" id="successMessage"></div>
+        </form>
+
+        <div class="demo-users">
+            <h3>Quick Login</h3>
+            
+            <div class="user-card admin" onclick="quickLogin('admin', 'admin123')">
+                <div class="user-info">
+                    <span class="user-name">👨‍💼 Administrator</span>
+                    <span class="user-role admin">ADMIN</span>
+                </div>
+            </div>
+
+            <div class="user-card user" onclick="quickLogin('user', 'user123')">
+                <div class="user-info">
+                    <span class="user-name">👤 Regular User</span>
+                    <span class="user-role user">USER</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        
+        // Check if already logged in
+        window.addEventListener('load', () => {
+            const sessionId = localStorage.getItem('sessionId');
+            const userRole = localStorage.getItem('userRole');
+            
+            if (sessionId && userRole) {
+                redirectToApp(userRole);
+            }
+        });
+
+        document.getElementById('loginForm').addEventListener('submit', handleLogin);
+
+        async function handleLogin(event) {
+            event.preventDefault();
+            
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            
+            await performLogin(username, password);
+        }
+
+        async function quickLogin(username, password) {
+            document.getElementById('username').value = username;
+            document.getElementById('password').value = password;
+            await performLogin(username, password);
+        }
+
+        async function performLogin(username, password) {
+            const loginBtn = document.getElementById('loginBtn');
+            const loginText = document.getElementById('loginText');
+            const loadingSpinner = document.getElementById('loadingSpinner');
+            const errorMessage = document.getElementById('errorMessage');
+            const successMessage = document.getElementById('successMessage');
+
+            // Show loading state
+            loginBtn.disabled = true;
+            loginText.style.display = 'none';
+            loadingSpinner.style.display = 'block';
+            errorMessage.style.display = 'none';
+            successMessage.style.display = 'none';
+
+            try {
+                // Authenticate user (simplified - hash password on backend)
+                const response = await fetch(`${API_BASE}/auth/login`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        username: username,
+                        password: password
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    // Store session info
+                    localStorage.setItem('sessionId', data.session_id);
+                    localStorage.setItem('userRole', data.role);
+                    localStorage.setItem('username', data.username);
+
+                    // Show success message
+                    successMessage.textContent = `Welcome ${data.username}! Redirecting...`;
+                    successMessage.style.display = 'block';
+
+                    // Redirect based on role
+                    setTimeout(() => {
+                        redirectToApp(data.role);
+                    }, 1000);
+
+                } else {
+                    const error = await response.json();
+                    errorMessage.textContent = error.detail || 'Login failed';
+                    errorMessage.style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                errorMessage.textContent = 'Connection error. Please check if the server is running.';
+                errorMessage.style.display = 'block';
+            } finally {
+                // Reset loading state
+                loginBtn.disabled = false;
+                loginText.style.display = 'inline';
+                loadingSpinner.style.display = 'none';
+            }
+        }
+
+        function redirectToApp(role) {
+            if (role === 'admin') {
+                // Redirect to admin dashboard
+                window.location.href = 'admin-simple.html';
+            } else {
+                // Redirect to user image browser
+                window.location.href = 'user-browser.html';
+            }
+        }
+
+        // Demo mode for offline testing
+        if (window.location.protocol === 'file:') {
+            console.log('Demo mode - file:// protocol detected');
+            
+            async function performLogin(username, password) {
+                const successMessage = document.getElementById('successMessage');
+                
+                // Simulate authentication
+                if ((username === 'admin' && password === 'admin123') || 
+                    (username === 'user' && password === 'user123')) {
+                    
+                    const role = username === 'admin' ? 'admin' : 'user';
+                    
+                    localStorage.setItem('sessionId', 'demo-session-' + Date.now());
+                    localStorage.setItem('userRole', role);
+                    localStorage.setItem('username', username);
+
+                    successMessage.textContent = `Welcome ${username}! Redirecting...`;
+                    successMessage.style.display = 'block';
+
+                    setTimeout(() => {
+                        redirectToApp(role);
+                    }, 1000);
+                } else {
+                    const errorMessage = document.getElementById('errorMessage');
+                    errorMessage.textContent = 'Invalid credentials. Use admin/admin123 or user/user123';
+                    errorMessage.style.display = 'block';
+                }
+            }
+        }
+    </script>
+</body>
+</html>

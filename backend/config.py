@@ -8,9 +8,19 @@ from typing import Dict, Any
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
-env_path = Path(__file__).parent / ".env"
+env_path = Path(__file__).parent.parent / ".env"  # Go up one level to project root
 if env_path.exists():
     load_dotenv(env_path)
+else:
+    # Try alternative paths
+    alt_paths = [
+        Path(__file__).parent / ".env",
+        Path.cwd() / ".env"
+    ]
+    for alt_path in alt_paths:
+        if alt_path.exists():
+            load_dotenv(alt_path)
+            break
 
 class Config:
     """Application configuration class."""
